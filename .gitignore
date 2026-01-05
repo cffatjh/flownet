@@ -1,0 +1,30 @@
+# .NET
+[Bb]in/
+[Oo]bj/
+*.user
+*.userosscache
+*.sln.doccache
+.vs/
+
+# Node
+node_modules/
+dist/
+.env*
+!.env.example
+
+# Logs
+*.log
+build_log.txt
+build_output.txt
+compiler_error.log
+msbuild.log
+build_error.log
+
+# Runtime data
+JurisFlow.Server/jurisflow.db*
+JurisFlow.Server/uploads/
+JurisFlow.Server/server_run_*.txt
+
+# OS
+.DS_Store
+Thumbs.db
