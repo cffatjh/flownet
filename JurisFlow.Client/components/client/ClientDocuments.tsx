@@ -1,19 +1,25 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { DocumentFile } from '../../types';
-import { Folder, FileText, Download, Plus, X } from '../Icons';
+import { Folder, FileText, Download, Plus, X, Search } from '../Icons';
 import mammoth from 'mammoth';
 import { googleDocsService } from '../../services/googleDocsService';
 import { toast } from '../Toast';
 import { getGoogleClientId } from '../../services/googleConfig';
+import { useClientAuth } from '../../contexts/ClientAuthContext';
 
 const ClientDocuments: React.FC = () => {
+  const { client } = useClientAuth();
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [matters, setMatters] = useState<any[]>([]);
   const [selectedMatter, setSelectedMatter] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterSource, setFilterSource] = useState<'all' | 'firm' | 'client'>('all');
+  const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent');
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [selectedMatterForUpload, setSelectedMatterForUpload] = useState<string>('');
+  const [uploadDescription, setUploadDescription] = useState('');
   const [viewingDoc, setViewingDoc] = useState<DocumentFile | null>(null);
   const [docContent, setDocContent] = useState<string>('');
   const [loadingContent, setLoadingContent] = useState(false);
@@ -46,6 +52,20 @@ const ClientDocuments: React.FC = () => {
     return path.startsWith('/') ? path : `/${path}`;
   };
 
+  const parseTags = (raw: any): string[] | undefined => {
+    if (!raw) return undefined;
+    if (Array.isArray(raw)) return raw.map(String);
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed.map(String);
+      } catch {
+        return raw.split(',').map(s => s.trim()).filter(Boolean);
+      }
+    }
+    return undefined;
+  };
+
   const mapServerDocument = (doc: any): DocumentFile => ({
     id: doc.id,
     name: doc.name || doc.fileName,
@@ -55,14 +75,44 @@ const ClientDocuments: React.FC = () => {
     updatedAt: doc.updatedAt || doc.createdAt,
     matterId: doc.matterId,
     description: doc.description,
-    tags: doc.tags,
+    tags: parseTags(doc.tags),
     category: doc.category,
-    filePath: normalizeFilePath(doc.filePath)
+    filePath: normalizeFilePath(doc.filePath),
+    uploadedBy: doc.uploadedBy
   });
 
   useEffect(() => {
     setIsGoogleDocsConnected(!!googleDocsAccessToken);
   }, [googleDocsAccessToken]);
+
+  const getMatterLabel = (matterId?: string) => {
+    if (!matterId) return 'General';
+    const matter = matters.find(m => m.id === matterId);
+    if (!matter) return 'Unknown case';
+    return `${matter.caseNumber} - ${matter.name}`;
+  };
+
+  const isClientUpload = (doc: DocumentFile) => {
+    if (doc.uploadedBy && client?.id) {
+      return doc.uploadedBy === client.id;
+    }
+    if (doc.content && !doc.filePath) {
+      return true;
+    }
+    return false;
+  };
+
+  const getSearchHaystack = (doc: DocumentFile) => {
+    return [
+      doc.name,
+      doc.description,
+      ...(doc.tags || []),
+      doc.category
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+  };
 
   const handleGoogleDocsConnect = () => {
     const clientId = getGoogleClientId();
@@ -87,7 +137,8 @@ const ClientDocuments: React.FC = () => {
         size: 'Google Doc',
         updatedAt: doc.modifiedTime,
         matterId: undefined,
-        content: doc.webViewLink
+        content: doc.webViewLink,
+        uploadedBy: client?.id
       }));
 
       const existingDocs = JSON.parse(localStorage.getItem('client_documents') || '[]');
@@ -126,8 +177,16 @@ const ClientDocuments: React.FC = () => {
 
         const storedDocs = localStorage.getItem('client_documents') || localStorage.getItem('documents');
         const localDocs = storedDocs ? JSON.parse(storedDocs) : [];
+        const mappedLocalDocs = Array.isArray(localDocs)
+          ? localDocs.map((doc: any) => ({
+            ...doc,
+            tags: parseTags(doc.tags),
+            uploadedBy: doc.uploadedBy || client?.id,
+            filePath: doc.filePath ? normalizeFilePath(doc.filePath) : doc.filePath
+          }))
+          : [];
 
-        setDocuments([...serverDocs, ...localDocs]);
+        setDocuments([...serverDocs, ...mappedLocalDocs]);
       } catch (error) {
         console.error('Error loading documents:', error);
       } finally {
@@ -136,11 +195,23 @@ const ClientDocuments: React.FC = () => {
     };
 
     loadData();
-  }, []);
+  }, [client?.id]);
 
-  const filteredDocs = selectedMatter
-    ? documents.filter(doc => doc.matterId === selectedMatter)
-    : documents;
+  const query = searchQuery.trim().toLowerCase();
+  const filteredDocs = documents.filter(doc => {
+    if (selectedMatter && doc.matterId !== selectedMatter) return false;
+    if (filterSource === 'client' && !isClientUpload(doc)) return false;
+    if (filterSource === 'firm' && isClientUpload(doc)) return false;
+    if (query.length >= 2 && !getSearchHaystack(doc).includes(query)) return false;
+    return true;
+  });
+
+  const sortedDocs = [...filteredDocs].sort((a, b) => {
+    if (sortBy === 'name') {
+      return a.name.localeCompare(b.name);
+    }
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -159,6 +230,9 @@ const ClientDocuments: React.FC = () => {
       formData.append('file', pendingFile);
       if (selectedMatterForUpload) {
         formData.append('matterId', selectedMatterForUpload);
+      }
+      if (uploadDescription.trim()) {
+        formData.append('description', uploadDescription.trim());
       }
 
       const res = await fetch('/api/client/documents/upload', {
@@ -184,6 +258,7 @@ const ClientDocuments: React.FC = () => {
       setShowUploadModal(false);
       setPendingFile(null);
       setSelectedMatterForUpload('');
+      setUploadDescription('');
     }
   };
 
@@ -267,34 +342,80 @@ const ClientDocuments: React.FC = () => {
 
   return (
     <div className="p-8 h-full overflow-y-auto">
-      <div className="mb-6 flex justify-between items-center">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">Documents</h2>
-          <p className="text-gray-600 mt-1">Access and upload documents related to your cases</p>
-        </div>
-        <div className="flex gap-2">
-          <input type="file" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
-          {isGoogleDocsConnected ? (
+      <div className="mb-6">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-bold text-slate-900">Documents</h2>
+            <p className="text-gray-600 mt-1">Access and upload documents related to your cases</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input type="file" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
+            {isGoogleDocsConnected ? (
+              <button
+                onClick={handleGoogleDocsSync}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors shadow-sm"
+              >
+                <FileText className="w-4 h-4" /> Sync Google Docs
+              </button>
+            ) : (
+              <button
+                onClick={handleGoogleDocsConnect}
+                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
+              >
+                <FileText className="w-4 h-4" /> Connect Google Docs
+              </button>
+            )}
             <button
-              onClick={handleGoogleDocsSync}
-              className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 transition-colors shadow-sm"
-            >
-              <FileText className="w-4 h-4" /> Sync Google Docs
-            </button>
-          ) : (
-            <button
-              onClick={handleGoogleDocsConnect}
+              onClick={() => fileInputRef.current?.click()}
               className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
             >
-              <FileText className="w-4 h-4" /> Connect Google Docs
+              <Plus className="w-4 h-4" /> Upload Document
             </button>
-          )}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors shadow-sm"
-          >
-            <Plus className="w-4 h-4" /> Upload Document
-          </button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-col lg:flex-row lg:items-center gap-3">
+          <div className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg w-full lg:max-w-md">
+            <Search className="w-4 h-4 text-gray-400" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by name, tag, or description..."
+              className="w-full text-sm text-slate-700 placeholder:text-gray-400 outline-none"
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              { key: 'all', label: 'All' },
+              { key: 'firm', label: 'Firm Shared' },
+              { key: 'client', label: 'My Uploads' }
+            ] as const).map(item => (
+              <button
+                key={item.key}
+                onClick={() => setFilterSource(item.key)}
+                className={`px-3 py-2 rounded-lg text-xs font-semibold border ${
+                  filterSource === item.key
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-white border-gray-200 text-gray-600 hover:border-gray-300'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500">Sort by</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value as 'recent' | 'name')}
+              className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
+            >
+              <option value="recent">Most Recent</option>
+              <option value="name">Name</option>
+            </select>
+          </div>
         </div>
       </div>
 
@@ -323,43 +444,69 @@ const ClientDocuments: React.FC = () => {
 
         {/* Documents Grid */}
         <div className="flex-1">
-          {filteredDocs.length === 0 ? (
+          {sortedDocs.length === 0 ? (
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
               <Folder className="w-16 h-16 text-gray-300 mx-auto mb-4" />
               <p className="text-gray-400">No documents found</p>
+              {searchQuery.trim().length > 0 && (
+                <p className="text-xs text-gray-400 mt-2">Try adjusting your search or filters.</p>
+              )}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredDocs.map(doc => (
-                <div key={doc.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow">
-                  <div className="flex items-start justify-between mb-3">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${doc.type === 'pdf' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-600'
-                      }`}>
-                      <FileText className="w-6 h-6" />
+              {sortedDocs.map(doc => {
+                const isMine = isClientUpload(doc);
+                return (
+                  <div key={doc.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow">
+                    <div className="flex items-start justify-between mb-3">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${doc.type === 'pdf' ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-600'
+                        }`}>
+                        <FileText className="w-6 h-6" />
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => handleOpen(doc)}
+                          className="p-1 text-blue-600 hover:text-blue-800"
+                          title="View"
+                        >
+                          <FileText className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDownload(doc)}
+                          className="p-1 text-gray-400 hover:text-gray-600"
+                          title="Download"
+                        >
+                          <Download className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => handleOpen(doc)}
-                        className="p-1 text-blue-600 hover:text-blue-800"
-                        title="View"
-                      >
-                        <FileText className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDownload(doc)}
-                        className="p-1 text-gray-400 hover:text-gray-600"
-                        title="Download"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
+                    <div className="flex items-center justify-between gap-2">
+                      <h4 className="font-semibold text-slate-900 truncate">{doc.name}</h4>
+                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${isMine ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+                        {isMine ? 'My Upload' : 'Firm Shared'}
+                      </span>
                     </div>
+                    {doc.description && (
+                      <p className="text-xs text-gray-500 mt-1 line-clamp-2">{doc.description}</p>
+                    )}
+                    <div className="text-xs text-gray-500 mt-2">
+                      {doc.size || 'Unknown size'} - {new Date(doc.updatedAt).toLocaleDateString()}
+                    </div>
+                    <div className="mt-2 text-[11px] text-gray-400 truncate">
+                      {getMatterLabel(doc.matterId)}
+                    </div>
+                    {doc.tags && doc.tags.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {doc.tags.slice(0, 3).map(tag => (
+                          <span key={tag} className="text-[10px] px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <h4 className="font-semibold text-slate-900 mb-1 truncate">{doc.name}</h4>
-                  <div className="text-xs text-gray-500">
-                    {doc.size || 'Unknown size'} - {new Date(doc.updatedAt).toLocaleDateString()}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -388,6 +535,15 @@ const ClientDocuments: React.FC = () => {
                   </option>
                 ))}
               </select>
+
+              <label className="block text-sm font-medium text-gray-700 mb-2 mt-4">Description (Optional)</label>
+              <textarea
+                value={uploadDescription}
+                onChange={(e) => setUploadDescription(e.target.value)}
+                placeholder="Add a short description for this document"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                rows={3}
+              />
             </div>
 
             <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
@@ -396,6 +552,7 @@ const ClientDocuments: React.FC = () => {
                   setShowUploadModal(false);
                   setPendingFile(null);
                   setSelectedMatterForUpload('');
+                  setUploadDescription('');
                 }}
                 className="px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium"
               >
@@ -419,7 +576,9 @@ const ClientDocuments: React.FC = () => {
             <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
               <div>
                 <h3 className="font-bold text-lg text-slate-800">{viewingDoc.name}</h3>
-                <p className="text-xs text-gray-500 mt-1">{viewingDoc.size} - {new Date(viewingDoc.updatedAt).toLocaleDateString()}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  {viewingDoc.size} - {new Date(viewingDoc.updatedAt).toLocaleDateString()} - {getMatterLabel(viewingDoc.matterId)}
+                </p>
               </div>
               <button
                 onClick={() => { setViewingDoc(null); setDocContent(''); }}

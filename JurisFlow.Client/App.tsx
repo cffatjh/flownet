@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import GoogleAuthCallback from './components/GoogleAuthCallback';
 import MicrosoftAuthCallback from './components/MicrosoftAuthCallback';
 import ZoomAuthCallback from './components/ZoomAuthCallback';
-import { LayoutDashboard, Briefcase, Scale, BrainCircuit, Plus, Calendar as CalendarIcon, CreditCard, Bell, Folder, Mail, Users, Settings as SettingsIcon, Search, Timer, CheckSquare, Video, BarChart3 } from './components/Icons';
+import { LayoutDashboard, Briefcase, Scale, BrainCircuit, Plus, Calendar as CalendarIcon, CreditCard, Bell, Folder, Mail, Users, Settings as SettingsIcon, Search, Timer, CheckSquare, Video, BarChart3, FileText } from './components/Icons';
 import Dashboard from './components/Dashboard';
 import Matters from './components/Matters';
 import AIDrafter from './components/AIDrafter';
@@ -12,6 +12,7 @@ import Documents from './components/Documents';
 import Communications from './components/Communications';
 import VideoCall from './components/VideoCall';
 import CRM from './components/CRM';
+import Intake from './components/Intake';
 import Login from './components/Login';
 import ForgotPassword from './components/ForgotPassword';
 import ResetPassword from './components/ResetPassword';
@@ -34,7 +35,7 @@ import { DataProvider, useData } from './contexts/DataContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { Language } from './translations';
 
-type ActiveTab = 'dashboard' | 'matters' | 'documents' | 'communications' | 'crm' | 'ai' | 'billing' | 'calendar' | 'time' | 'tasks' | 'settings' | 'videocall' | 'reports' | 'employees' | 'trust';
+type ActiveTab = 'dashboard' | 'matters' | 'documents' | 'communications' | 'crm' | 'intake' | 'ai' | 'billing' | 'calendar' | 'time' | 'tasks' | 'settings' | 'videocall' | 'reports' | 'employees' | 'trust';
 
 const FLAGS: Record<Language, string> = {
   en: 'EN',
@@ -115,6 +116,7 @@ const MainLayout = () => {
           <NavButton tab="matters" icon={Briefcase} label={t('nav_matters')} />
           {/* Swapped order: CRM before Tasks */}
           <NavButton tab="crm" icon={Users} label={t('nav_crm')} />
+          <NavButton tab="intake" icon={FileText} label="Intake" />
           <NavButton tab="tasks" icon={CheckSquare} label={t('nav_tasks')} />
           <NavButton tab="communications" icon={Mail} label={t('nav_comms')} />
           <NavButton tab="videocall" icon={Video} label="Video Calls" />
@@ -210,6 +212,7 @@ const ComponentSwitcher = ({ activeTab }: { activeTab: ActiveTab }) => {
     case 'communications': return <Communications />;
     case 'videocall': return <VideoCall />;
     case 'crm': return <CRM />;
+    case 'intake': return <Intake />;
     case 'billing': return <Billing />;
     case 'trust': return <TrustAccounting />;
     case 'calendar': return <CalendarView />;

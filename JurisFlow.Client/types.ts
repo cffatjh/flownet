@@ -667,6 +667,7 @@ export interface DocumentFile {
   category?: string;
   status?: string; // DocumentStatus enum value
   version?: number;
+  uploadedBy?: string;
 }
 
 export interface Message {

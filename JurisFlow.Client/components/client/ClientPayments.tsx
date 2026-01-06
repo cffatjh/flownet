@@ -118,6 +118,12 @@ const ClientPayments: React.FC<ClientPaymentsProps> = ({ clientId }) => {
                     <p className="text-gray-600 mt-1">Review invoices, choose a payment method, and complete your balance</p>
                 </div>
 
+                {invoices.length > 0 && unpaidInvoices.length === 0 && (
+                    <div className="mb-6 bg-emerald-50 border border-emerald-100 text-emerald-700 px-4 py-3 rounded-lg text-sm">
+                        All invoices are paid. Thank you for staying current with your balance.
+                    </div>
+                )}
+
                 {/* Summary Cards */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                     <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">

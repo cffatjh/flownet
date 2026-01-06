@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Plus, Mail, Paperclip, X } from '../Icons';
+import { Send, Plus, Mail, Paperclip, X, Search } from '../Icons';
 import { gmailService, GmailMessage } from '../../services/gmailService';
 import { toast } from '../Toast';
 
@@ -11,6 +11,8 @@ interface ClientMessage {
   message: string;
   read: boolean;
   createdAt: string;
+  attachmentsJson?: string | null;
+  source?: 'internal' | 'gmail';
 }
 
 const ClientMessages: React.FC = () => {
@@ -26,6 +28,8 @@ const ClientMessages: React.FC = () => {
   const [gmailAccessToken, setGmailAccessToken] = useState<string | null>(
     localStorage.getItem('gmail_access_token')
   );
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showUnreadOnly, setShowUnreadOnly] = useState(false);
   
   const [composeData, setComposeData] = useState({
     matterId: '',
@@ -45,6 +49,47 @@ const ClientMessages: React.FC = () => {
     setIsGmailConnected(!!gmailAccessToken);
   }, [gmailAccessToken]);
 
+  const unreadCount = messages.filter(msg => !msg.read).length;
+
+  const formatDate = (value: string) => {
+    if (!value) return '';
+    return new Date(value).toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const parseAttachments = (raw?: string | null) => {
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const handleSelectMessage = async (msg: ClientMessage) => {
+    setSelectedMessage(msg);
+    if (msg.source !== 'internal' || msg.read) return;
+    try {
+      const token = localStorage.getItem('client_token');
+      const res = await fetch(`/api/client/messages/${msg.id}/read`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        setMessages(prev => prev.map(m => m.id === msg.id ? { ...m, read: true } : m));
+        setSelectedMessage(prev => prev ? { ...prev, read: true } : prev);
+      }
+    } catch (error) {
+      console.error('Error marking message as read:', error);
+    }
+  };
+
   useEffect(() => {
     const loadData = async () => {
       try {
@@ -58,13 +103,18 @@ const ClientMessages: React.FC = () => {
           })
         ]);
         
-        const messagesData = await messagesRes.json();
-        const mattersData = await mattersRes.json();
-        
-        setMessages(messagesData);
+        const messagesData = messagesRes.ok ? await messagesRes.json() : [];
+        const mattersData = mattersRes.ok ? await mattersRes.json() : [];
+
+        const normalizedMessages = Array.isArray(messagesData)
+          ? messagesData.map((msg: ClientMessage) => ({ ...msg, source: 'internal' as const }))
+          : [];
+
+        setMessages(normalizedMessages);
         setMatters(mattersData);
       } catch (error) {
         console.error('Error loading messages:', error);
+        toast.error('Failed to load messages.');
       } finally {
         setLoading(false);
       }
@@ -166,7 +216,7 @@ const ClientMessages: React.FC = () => {
       
       if (res.ok) {
         const newMessage = await res.json();
-        setMessages([newMessage, ...messages]);
+        setMessages([{ ...newMessage, source: 'internal' }, ...messages]);
         setShowCompose(false);
         setComposeData({ matterId: '', subject: '', message: '' });
         setAttachedFiles([]);
@@ -178,6 +228,57 @@ const ClientMessages: React.FC = () => {
       console.error('Error sending message:', error);
       toast.error('Failed to send message. Please try again.');
     }
+  };
+
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredInternalMessages = messages.filter(msg => {
+    if (showUnreadOnly && msg.read) return false;
+    if (!normalizedQuery) return true;
+    const haystack = [
+      msg.subject,
+      msg.message,
+      msg.matter?.caseNumber,
+      msg.matter?.name
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+
+  const filteredGmailMessages = gmailMessages.filter((msg: any) => {
+    if (!normalizedQuery) return true;
+    const haystack = [
+      msg.subject,
+      msg.preview,
+      msg.from
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return haystack.includes(normalizedQuery);
+  });
+
+  const selectedAttachments = selectedMessage?.source === 'internal'
+    ? parseAttachments(selectedMessage.attachmentsJson)
+    : [];
+
+  const handleReply = () => {
+    if (!selectedMessage) return;
+    if (selectedMessage.source === 'gmail') {
+      setShowGmailCompose(true);
+      setGmailComposeData(prev => ({
+        ...prev,
+        subject: selectedMessage.subject ? `Re: ${selectedMessage.subject}` : prev.subject
+      }));
+      return;
+    }
+    setComposeData({
+      matterId: selectedMessage.matterId || '',
+      subject: selectedMessage.subject.startsWith('Re:') ? selectedMessage.subject : `Re: ${selectedMessage.subject}`,
+      message: ''
+    });
+    setShowCompose(true);
   };
 
   if (loading) {
@@ -194,7 +295,14 @@ const ClientMessages: React.FC = () => {
       <div className="w-96 border-r border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
           <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-bold text-slate-800">Messages</h2>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold text-slate-800">Messages</h2>
+              {unreadCount > 0 && (
+                <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-xs font-bold">
+                  {unreadCount} unread
+                </span>
+              )}
+            </div>
             <button 
               onClick={() => {
                 if (activeTab === 'internal') setShowCompose(true);
@@ -234,6 +342,28 @@ const ClientMessages: React.FC = () => {
               Gmail
             </button>
           </div>
+
+          <div className="mt-3 flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg">
+            <Search className="w-4 h-4 text-gray-400" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={activeTab === 'gmail' ? 'Search Gmail...' : 'Search messages...'}
+              className="w-full text-sm text-slate-700 placeholder:text-gray-400 outline-none"
+            />
+          </div>
+
+          {activeTab === 'internal' && (
+            <label className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+              <input
+                type="checkbox"
+                className="rounded border-gray-300"
+                checked={showUnreadOnly}
+                onChange={(e) => setShowUnreadOnly(e.target.checked)}
+              />
+              Show unread only
+            </label>
+          )}
           
           {/* Gmail Connect Button */}
           {activeTab === 'gmail' && !isGmailConnected && (
@@ -258,13 +388,13 @@ const ClientMessages: React.FC = () => {
 
         <div className="flex-1 overflow-y-auto">
           {activeTab === 'internal' ? (
-            messages.length === 0 ? (
+            filteredInternalMessages.length === 0 ? (
               <div className="p-8 text-center text-gray-400 text-sm">No messages</div>
             ) : (
-              messages.map(msg => (
+              filteredInternalMessages.map(msg => (
                 <div
                   key={msg.id}
-                  onClick={() => setSelectedMessage(msg)}
+                  onClick={() => handleSelectMessage(msg)}
                   className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors ${
                     selectedMessage?.id === msg.id ? 'bg-blue-50' : ''
                   }`}
@@ -273,7 +403,7 @@ const ClientMessages: React.FC = () => {
                     <span className={`text-sm ${!msg.read ? 'font-bold text-slate-900' : 'font-semibold text-slate-600'}`}>
                       {msg.subject}
                     </span>
-                    <span className="text-xs text-gray-400">{new Date(msg.createdAt).toLocaleDateString()}</span>
+                    <span className="text-xs text-gray-400">{formatDate(msg.createdAt)}</span>
                   </div>
                   <p className="text-xs text-gray-500 line-clamp-2">{msg.message}</p>
                   {msg.matter && (
@@ -285,12 +415,12 @@ const ClientMessages: React.FC = () => {
           ) : (
             gmailLoading ? (
               <div className="p-8 text-center text-gray-400 text-sm">Loading Gmail...</div>
-            ) : gmailMessages.length === 0 ? (
+            ) : filteredGmailMessages.length === 0 ? (
               <div className="p-8 text-center text-gray-400 text-sm">
                 {isGmailConnected ? 'No Gmail messages' : 'Connect Gmail to view emails'}
               </div>
             ) : (
-              gmailMessages.map((msg, idx) => (
+              filteredGmailMessages.map((msg, idx) => (
                 <div
                   key={idx}
                   onClick={() => setSelectedMessage({
@@ -298,7 +428,8 @@ const ClientMessages: React.FC = () => {
                     subject: msg.subject,
                     message: msg.preview,
                     read: true,
-                    createdAt: msg.date
+                    createdAt: msg.date,
+                    source: 'gmail'
                   })}
                   className="p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 transition-colors"
                 >
@@ -319,31 +450,52 @@ const ClientMessages: React.FC = () => {
       <div className="flex-1 flex flex-col bg-gray-50">
         {selectedMessage ? (
           <div className="flex-1 flex flex-col bg-white m-4 rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <div className="p-6 border-b border-gray-100">
-              <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
-              <div className="text-xs text-gray-500 mt-2">
-                {new Date(selectedMessage.createdAt).toLocaleString()}
-                {selectedMessage.matter && ` - Case: ${selectedMessage.matter.caseNumber}`}
+            <div className="p-6 border-b border-gray-100 flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">{selectedMessage.subject}</h2>
+                <div className="text-xs text-gray-500 mt-2">
+                  {formatDate(selectedMessage.createdAt)}
+                  {selectedMessage.matter && ` - Case: ${selectedMessage.matter.caseNumber}`}
+                  {selectedMessage.source === 'gmail' && ' - Gmail'}
+                </div>
               </div>
+              {selectedMessage.source === 'gmail' ? (
+                <button
+                  onClick={() => setShowGmailCompose(true)}
+                  className="px-3 py-2 text-xs font-semibold text-red-600 bg-red-50 rounded-lg hover:bg-red-100"
+                >
+                  Compose Email
+                </button>
+              ) : (
+                <button
+                  onClick={handleReply}
+                  className="px-3 py-2 text-xs font-semibold text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100"
+                >
+                  Reply
+                </button>
+              )}
             </div>
             <div className="p-8 text-sm text-slate-700 leading-relaxed whitespace-pre-wrap flex-1 overflow-y-auto">
               {selectedMessage.message}
-              {(() => {
-                const attachments = (selectedMessage as any).attachmentsJson ? JSON.parse((selectedMessage as any).attachmentsJson) : [];
-                if (attachments && attachments.length > 0) {
-                  return (
-                    <div className="mt-4 space-y-2">
-                      <div className="text-xs font-bold text-gray-500 uppercase">Attachments</div>
-                      {attachments.map((att: any, idx: number) => (
-                        <a key={idx} href={att.filePath || att.url} target="_blank" rel="noreferrer" className="block text-blue-600 text-sm underline">
-                          Attachment: {att.fileName || 'attachment'}
-                        </a>
-                      ))}
-                    </div>
-                  );
-                }
-                return null;
-              })()}
+              {selectedAttachments.length > 0 && (
+                <div className="mt-6 space-y-2">
+                  <div className="text-xs font-bold text-gray-500 uppercase">Attachments</div>
+                  {selectedAttachments.map((att: any, idx: number) => (
+                    <a
+                      key={`${att.filePath || att.url || att.fileName}-${idx}`}
+                      href={att.filePath || att.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-blue-700 hover:bg-gray-100"
+                    >
+                      <span className="truncate">{att.fileName || 'attachment'}</span>
+                      {att.size ? (
+                        <span className="text-xs text-gray-500">{Math.round(att.size / 1024)} KB</span>
+                      ) : null}
+                    </a>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         ) : (

@@ -135,6 +135,7 @@ namespace JurisFlow.Server.Controllers
                 description = d.Description,
                 tags = d.Tags,
                 category = d.Category,
+                uploadedBy = d.UploadedBy,
                 version = d.Version,
                 createdAt = d.CreatedAt,
                 updatedAt = d.UpdatedAt
@@ -226,6 +227,7 @@ namespace JurisFlow.Server.Controllers
                 description = document.Description,
                 tags = document.Tags,
                 category = document.Category,
+                uploadedBy = document.UploadedBy,
                 version = document.Version,
                 createdAt = document.CreatedAt,
                 updatedAt = document.UpdatedAt

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { FileText, Plus, Trash2, Eye, Edit, Copy, ExternalLink, Users, PieChart } from './Icons';
+import { FileText, Plus, Trash2, Edit, Copy, ChevronUp, ChevronDown } from './Icons';
 import { api } from '../services/api';
 
 interface IntakeForm {
@@ -286,16 +286,22 @@ export default function IntakeFormBuilder({ formId, onSave, onCancel }: IntakeFo
                                         <button
                                             onClick={() => moveField(index, 'up')}
                                             className="text-slate-400 hover:text-slate-600"
-                                        >↑</button>
+                                            aria-label="Move field up"
+                                        >
+                                            <ChevronUp className="w-4 h-4" />
+                                        </button>
                                         <button
                                             onClick={() => moveField(index, 'down')}
                                             className="text-slate-400 hover:text-slate-600"
-                                        >↓</button>
+                                            aria-label="Move field down"
+                                        >
+                                            <ChevronDown className="w-4 h-4" />
+                                        </button>
                                     </div>
                                     <div className="flex-1">
                                         <p className="font-medium text-sm">{field.label}</p>
                                         <p className="text-xs text-slate-500">
-                                            {field.type} {field.required && '• Required'}
+                                            {field.type}{field.required ? ' - Required' : ''}
                                         </p>
                                     </div>
                                     <button
