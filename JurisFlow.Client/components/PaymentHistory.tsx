@@ -16,9 +16,12 @@ interface PaymentTransaction {
     cardBrand?: string;
     transactionDate?: string;
     processedAt?: string;
+    scheduledFor?: string;
     refundedAt?: string;
     refundAmount?: number;
     receiptUrl?: string;
+    paymentPlanId?: string;
+    source?: string;
     createdAt: string;
 }
 
@@ -214,6 +217,12 @@ export default function PaymentHistory({
                                                     </>
                                                 )}
                                             </div>
+                                            {payment.paymentMethod && (
+                                                <p className="text-xs text-slate-500 mt-1">{payment.paymentMethod}</p>
+                                            )}
+                                            {payment.source === 'AutoPay' && payment.scheduledFor && (
+                                                <p className="text-xs text-blue-600 mt-1">Scheduled: {formatDate(payment.scheduledFor)}</p>
+                                            )}
                                             {payment.refundAmount && payment.refundAmount > 0 && (
                                                 <p className="text-xs text-purple-600 mt-1">
                                                     Refunded: {formatCurrency(payment.refundAmount)}

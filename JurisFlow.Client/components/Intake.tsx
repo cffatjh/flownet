@@ -86,7 +86,7 @@ interface MatterDraft {
 
 const Intake: React.FC = () => {
   const { formatDate } = useTranslation();
-  const { clients, addClient, addMatter } = useData();
+  const { clients, matters, addClient, addMatter } = useData();
   const { user } = useAuth();
 
   const [view, setView] = useState<'submissions' | 'forms'>('submissions');
@@ -275,6 +275,18 @@ const Intake: React.FC = () => {
     return getFirstValue(data, ['phone', 'phoneNumber', 'mobile', 'cell', 'mobilePhone']);
   };
 
+  const getCaseNumberFromNotes = (notes?: string) => {
+    if (!notes) return '';
+    const match = notes.match(/Matter created:\s*(.+)$/i);
+    return match ? match[1].trim() : '';
+  };
+
+  const getLinkedMatter = (notes?: string) => {
+    const caseNumber = getCaseNumberFromNotes(notes);
+    if (!caseNumber) return null;
+    return matters.find(matter => matter.caseNumber === caseNumber) || null;
+  };
+
   const handleCopyLink = async (slug: string) => {
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
     const url = `${baseUrl}/intake/${slug}`;
@@ -285,6 +297,23 @@ const Intake: React.FC = () => {
       console.error('Failed to copy intake link', error);
       toast.error('Failed to copy intake link.');
     }
+  };
+
+  const navigateToTab = (tab: string) => {
+    if (typeof window === 'undefined') return;
+    window.dispatchEvent(new CustomEvent('jf:navigate', { detail: { tab } }));
+  };
+
+  const openLinkedLead = (leadId: string) => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('cmd_target_lead', leadId);
+    navigateToTab('crm');
+  };
+
+  const openLinkedMatter = (matterId: string) => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('cmd_target_matter', matterId);
+    navigateToTab('matters');
   };
 
   const handleToggleForm = async (form: IntakeFormRecord, field: 'isActive' | 'isPublic') => {
@@ -355,7 +384,12 @@ const Intake: React.FC = () => {
   const handleConvertToLead = async () => {
     if (!selectedSubmission) return;
     try {
-      await api.intake.submissions.convertToLead(selectedSubmission.id);
+      const result = await api.intake.submissions.convertToLead(selectedSubmission.id);
+      const leadId = result?.leadId as string | undefined;
+      setSubmissions(prev => prev.map(item => item.id === selectedSubmission.id ? {
+        ...item,
+        leadId: leadId || item.leadId
+      } : item));
       updateSubmissionStatus(selectedSubmission.id, 'Converted', reviewNotes);
       toast.success('Submission converted to lead.');
     } catch (error) {
@@ -429,10 +463,11 @@ const Intake: React.FC = () => {
       const practiceArea = matterDraft.practiceArea.trim() || 'General Practice';
       const billableRate = parseFloat(matterDraft.billableRate) || 0;
       const trustBalance = parseFloat(matterDraft.trustBalance) || 0;
+      const caseNumber = matterDraft.caseNumber.trim() || generateCaseNumber();
 
       await addMatter({
         name: matterDraft.matterName.trim() || 'New Matter',
-        caseNumber: matterDraft.caseNumber.trim() || generateCaseNumber(),
+        caseNumber,
         practiceArea: practiceArea as PracticeArea,
         feeStructure: matterDraft.feeStructure || FeeStructure.Hourly,
         status: CaseStatus.Open,
@@ -445,9 +480,9 @@ const Intake: React.FC = () => {
 
       await api.intake.submissions.review(selectedSubmission.id, {
         status: 'Converted',
-        notes: `Matter created: ${matterDraft.caseNumber}`
+        notes: `Matter created: ${caseNumber}`
       });
-      updateSubmissionStatus(selectedSubmission.id, 'Converted', `Matter created: ${matterDraft.caseNumber}`);
+      updateSubmissionStatus(selectedSubmission.id, 'Converted', `Matter created: ${caseNumber}`);
 
       toast.success('Matter created from intake submission.');
       setShowMatterModal(false);
@@ -758,12 +793,22 @@ const Intake: React.FC = () => {
                     const email = getSubmissionEmail(data);
                     const phone = getSubmissionPhone(data);
                     const formName = formsById.get(submission.intakeFormId)?.name || 'Intake Form';
+                    const linkedMatter = getLinkedMatter(submission.reviewNotes);
+                    const hasLead = Boolean(submission.leadId);
 
                     return (
-                      <button
+                      <div
                         key={submission.id}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedSubmissionId(submission.id)}
-                        className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition ${selectedSubmissionId === submission.id ? 'bg-slate-50' : ''}`}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            setSelectedSubmissionId(submission.id);
+                          }
+                        }}
+                        className={`w-full text-left px-4 py-3 border-b border-gray-100 hover:bg-gray-50 transition cursor-pointer ${selectedSubmissionId === submission.id ? 'bg-slate-50' : ''}`}
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-sm font-semibold text-slate-800 truncate">{name}</span>
@@ -778,7 +823,35 @@ const Intake: React.FC = () => {
                           <span className="truncate">{formName}</span>
                           <span>{formatDate(submission.createdAt)}</span>
                         </div>
-                      </button>
+                        {(hasLead || linkedMatter) && (
+                          <div className="mt-2 flex flex-wrap gap-2 text-[11px]">
+                            {hasLead && submission.leadId && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openLinkedLead(submission.leadId as string);
+                                }}
+                                className="px-2 py-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                              >
+                                Open Lead
+                              </button>
+                            )}
+                            {linkedMatter && (
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openLinkedMatter(linkedMatter.id);
+                                }}
+                                className="px-2 py-1 rounded border border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                              >
+                                Open Matter
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     );
                   })
                 )}

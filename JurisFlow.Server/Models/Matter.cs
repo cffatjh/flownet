@@ -36,6 +36,18 @@ namespace JurisFlow.Server.Models
         public double BillableRate { get; set; }
         public double TrustBalance { get; set; } = 0;
 
+        public string? EntityId { get; set; }
+
+        [ForeignKey("EntityId")]
+        [JsonIgnore]
+        public FirmEntity? Entity { get; set; }
+
+        public string? OfficeId { get; set; }
+
+        [ForeignKey("OfficeId")]
+        [JsonIgnore]
+        public Office? Office { get; set; }
+
         // Foreign Key
         [Required]
         public string ClientId { get; set; }

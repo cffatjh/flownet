@@ -7,10 +7,8 @@ using JurisFlow.Server.Services;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using DocumentFormat.OpenXml.Packaging;
-using OpenXmlDoc = DocumentFormat.OpenXml.Wordprocessing.Document;
-using UglyToad.PdfPig;
-using UglyToad.PdfPig.Content;
+using System.Text.Json;
+using System.Linq;
 using DiffPlex;
 using DiffPlex.DiffBuilder;
 using DiffPlex.DiffBuilder.Model;
@@ -25,12 +23,14 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly IWebHostEnvironment _env;
         private readonly AuditLogger _auditLogger;
+        private readonly DocumentIndexService _documentIndexService;
 
-        public DocumentsController(JurisFlowDbContext context, IWebHostEnvironment env, AuditLogger auditLogger)
+        public DocumentsController(JurisFlowDbContext context, IWebHostEnvironment env, AuditLogger auditLogger, DocumentIndexService documentIndexService)
         {
             _context = context;
             _env = env;
             _auditLogger = auditLogger;
+            _documentIndexService = documentIndexService;
         }
 
         private static string ComputeSha256(string filePath)
@@ -46,69 +46,10 @@ namespace JurisFlow.Server.Controllers
             return sb.ToString();
         }
 
-        private static string ExtractDocxText(string filePath)
+        private static string? SerializeTags(List<string>? tags)
         {
-            try
-            {
-                using var doc = WordprocessingDocument.Open(filePath, false);
-                var body = doc.MainDocumentPart?.Document?.Body;
-                if (body == null) return string.Empty;
-                return body.InnerText ?? string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
-        }
-
-        private static async Task<string> ExtractTextAsync(string fullPath)
-        {
-            try
-            {
-                var info = new FileInfo(fullPath);
-                if (info.Length > 25 * 1024 * 1024)
-                {
-                    return string.Empty; // skip very large files
-                }
-            }
-            catch
-            {
-                return string.Empty;
-            }
-
-            var ext = Path.GetExtension(fullPath).ToLowerInvariant();
-            if (ext == ".txt" || ext == ".md")
-            {
-                return await System.IO.File.ReadAllTextAsync(fullPath);
-            }
-            if (ext == ".docx")
-            {
-                return ExtractDocxText(fullPath);
-            }
-            if (ext == ".pdf")
-            {
-                return ExtractPdfText(fullPath);
-            }
-            // Unsupported types: return empty to avoid false positives
-            return string.Empty;
-        }
-
-        private static string ExtractPdfText(string filePath)
-        {
-            try
-            {
-                var sb = new StringBuilder();
-                using var doc = PdfDocument.Open(filePath);
-                foreach (Page page in doc.GetPages())
-                {
-                    sb.AppendLine(page.Text);
-                }
-                return sb.ToString();
-            }
-            catch
-            {
-                return string.Empty;
-            }
+            if (tags == null || tags.Count == 0) return null;
+            return JsonSerializer.Serialize(tags);
         }
 
         // GET: api/Documents
@@ -123,6 +64,121 @@ namespace JurisFlow.Server.Controllers
             }
 
             return await query.OrderByDescending(d => d.CreatedAt).ToListAsync();
+        }
+
+        // PUT: api/Documents/{id}
+        [HttpPut("{id}")]
+        public async Task<IActionResult> UpdateDocument(string id, [FromBody] DocumentUpdateDto dto)
+        {
+            var document = await _context.Documents.FindAsync(id);
+            if (document == null) return NotFound();
+
+            if (dto.MatterId.HasValue)
+            {
+                var matterValue = dto.MatterId.Value;
+                document.MatterId = matterValue.ValueKind == JsonValueKind.Null ? null : matterValue.GetString();
+            }
+            if (dto.Description != null)
+            {
+                document.Description = string.IsNullOrWhiteSpace(dto.Description) ? null : dto.Description;
+            }
+            if (dto.Category != null)
+            {
+                document.Category = string.IsNullOrWhiteSpace(dto.Category) ? null : dto.Category;
+            }
+            if (dto.Tags.HasValue)
+            {
+                var tagsValue = dto.Tags.Value;
+                if (tagsValue.ValueKind == JsonValueKind.Null)
+                {
+                    document.Tags = null;
+                }
+                else if (tagsValue.ValueKind == JsonValueKind.Array)
+                {
+                    var tags = new List<string>();
+                    foreach (var item in tagsValue.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String)
+                        {
+                            var tag = item.GetString();
+                            if (!string.IsNullOrWhiteSpace(tag))
+                            {
+                                tags.Add(tag.Trim());
+                            }
+                        }
+                    }
+                    document.Tags = SerializeTags(tags);
+                }
+                else if (tagsValue.ValueKind == JsonValueKind.String)
+                {
+                    var raw = tagsValue.GetString() ?? string.Empty;
+                    var tags = raw.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(t => t.Trim())
+                        .Where(t => t.Length > 0)
+                        .ToList();
+                    document.Tags = SerializeTags(tags);
+                }
+            }
+
+            var previousStatus = document.Status;
+            if (dto.Status != null)
+            {
+                document.Status = string.IsNullOrWhiteSpace(dto.Status) ? null : dto.Status;
+            }
+
+            if (!string.IsNullOrWhiteSpace(dto.LegalHoldReason))
+            {
+                document.LegalHoldReason = dto.LegalHoldReason;
+            }
+
+            var isLegalHold = string.Equals(document.Status, "Legal Hold", StringComparison.OrdinalIgnoreCase);
+            if (isLegalHold)
+            {
+                if (!document.LegalHoldPlacedAt.HasValue)
+                {
+                    document.LegalHoldPlacedAt = DateTime.UtcNow;
+                }
+                if (string.IsNullOrEmpty(document.LegalHoldPlacedBy))
+                {
+                    document.LegalHoldPlacedBy = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                }
+                document.LegalHoldReleasedAt = null;
+                document.LegalHoldReleasedBy = null;
+            }
+            else if (string.Equals(previousStatus, "Legal Hold", StringComparison.OrdinalIgnoreCase))
+            {
+                document.LegalHoldReleasedAt = DateTime.UtcNow;
+                document.LegalHoldReleasedBy = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            }
+
+            document.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(HttpContext, "document.update", "Document", document.Id, $"Status={document.Status}, MatterId={document.MatterId}");
+
+            return Ok(document);
+        }
+
+        // PUT: api/Documents/bulk-assign
+        [HttpPut("bulk-assign")]
+        public async Task<IActionResult> BulkAssign([FromBody] DocumentBulkAssignDto dto)
+        {
+            if (dto.Ids == null || dto.Ids.Count == 0)
+            {
+                return BadRequest(new { message = "Document ids are required." });
+            }
+
+            var docs = await _context.Documents.Where(d => dto.Ids.Contains(d.Id)).ToListAsync();
+            foreach (var doc in docs)
+            {
+                doc.MatterId = dto.MatterId;
+                doc.UpdatedAt = DateTime.UtcNow;
+            }
+
+            await _context.SaveChangesAsync();
+            await _auditLogger.LogAsync(HttpContext, "document.bulk_assign", "Document", null, $"Count={docs.Count}, MatterId={dto.MatterId}");
+
+            return Ok(new { updated = docs.Count });
         }
 
         // GET: api/Documents/{id}/versions
@@ -180,6 +236,7 @@ namespace JurisFlow.Server.Controllers
             document.Name = version.FileName;
             document.FilePath = "uploads/" + uniqueFileName;
             document.FileSize = new FileInfo(destPath).Length;
+            document.Version += 1;
             document.UpdatedAt = DateTime.UtcNow;
 
             var restoredVersion = new DocumentVersion
@@ -246,34 +303,61 @@ namespace JurisFlow.Server.Controllers
                 docsQuery = docsQuery.Where(d => d.MatterId == matterId);
             }
 
-            var candidates = await docsQuery.OrderByDescending(d => d.CreatedAt).ToListAsync();
-
-            var matches = new List<Document>();
-            foreach (var doc in candidates)
-            {
-                // Name/description/tags quick check
-                if ((!string.IsNullOrEmpty(doc.Name) && doc.Name.ToLowerInvariant().Contains(normalized)) ||
+            var metadataMatches = await docsQuery
+                .Where(doc =>
+                    (!string.IsNullOrEmpty(doc.Name) && doc.Name.ToLowerInvariant().Contains(normalized)) ||
                     (!string.IsNullOrEmpty(doc.FileName) && doc.FileName.ToLowerInvariant().Contains(normalized)) ||
                     (!string.IsNullOrEmpty(doc.Description) && doc.Description.ToLowerInvariant().Contains(normalized)) ||
                     (!string.IsNullOrEmpty(doc.Tags) && doc.Tags.ToLowerInvariant().Contains(normalized)))
+                .OrderByDescending(d => d.CreatedAt)
+                .ToListAsync();
+
+            var matches = new List<Document>(metadataMatches);
+
+            if (includeContent)
+            {
+                var contentMatchIds = new List<string>();
+                var tokens = DocumentIndexService.TokenizeQuery(normalized);
+
+                if (tokens.Count > 0)
                 {
-                    matches.Add(doc);
-                    continue;
+                    contentMatchIds = await _context.DocumentContentTokens
+                        .Where(t => tokens.Contains(t.Token))
+                        .GroupBy(t => t.DocumentId)
+                        .Where(g => g.Select(x => x.Token).Distinct().Count() >= tokens.Count)
+                        .Select(g => g.Key)
+                        .ToListAsync();
+
+                    if (contentMatchIds.Count > 0 && normalized.Length >= 4 && normalized.Contains(' '))
+                    {
+                        contentMatchIds = await _context.DocumentContentIndexes
+                            .Where(i => contentMatchIds.Contains(i.DocumentId) && i.NormalizedContent != null && i.NormalizedContent.Contains(normalized))
+                            .Select(i => i.DocumentId)
+                            .ToListAsync();
+                    }
+                }
+                else if (normalized.Length >= 3)
+                {
+                    contentMatchIds = await _context.DocumentContentIndexes
+                        .Where(i => i.NormalizedContent != null && i.NormalizedContent.Contains(normalized))
+                        .Select(i => i.DocumentId)
+                        .ToListAsync();
                 }
 
-                if (!includeContent)
+                if (contentMatchIds.Count > 0)
                 {
-                    continue;
-                }
+                    var contentMatches = await docsQuery
+                        .Where(d => contentMatchIds.Contains(d.Id))
+                        .OrderByDescending(d => d.CreatedAt)
+                        .ToListAsync();
 
-                // Content check (txt/docx/pdf only)
-                var fullPath = Path.Combine(_env.ContentRootPath, doc.FilePath);
-                if (!System.IO.File.Exists(fullPath)) continue;
-
-                var content = await ExtractTextAsync(fullPath);
-                if (!string.IsNullOrEmpty(content) && content.ToLowerInvariant().Contains(normalized))
-                {
-                    matches.Add(doc);
+                    foreach (var doc in contentMatches)
+                    {
+                        if (matches.All(m => m.Id != doc.Id))
+                        {
+                            matches.Add(doc);
+                        }
+                    }
                 }
             }
 
@@ -332,6 +416,7 @@ namespace JurisFlow.Server.Controllers
                 MimeType = file.ContentType,
                 MatterId = matterId,
                 Description = description,
+                Status = "Draft",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -353,9 +438,70 @@ namespace JurisFlow.Server.Controllers
             _context.DocumentVersions.Add(version);
             await _context.SaveChangesAsync();
 
+            await _documentIndexService.UpsertIndexAsync(document, filePath);
             await _auditLogger.LogAsync(HttpContext, "document.upload", "Document", document.Id, $"MatterId={matterId}, Name={file.FileName}, Size={file.Length}");
 
             return Ok(document);
+        }
+
+        // POST: api/Documents/{id}/versions
+        [HttpPost("{id}/versions")]
+        public async Task<IActionResult> UploadNewVersion(string id, [FromForm] IFormFile file)
+        {
+            if (file == null || file.Length == 0)
+            {
+                return BadRequest(new { message = "No file uploaded." });
+            }
+
+            var document = await _context.Documents.FindAsync(id);
+            if (document == null) return NotFound();
+
+            var uploadsFolder = Path.Combine(_env.ContentRootPath, "uploads");
+            if (!Directory.Exists(uploadsFolder))
+                Directory.CreateDirectory(uploadsFolder);
+
+            var uniqueFileName = Guid.NewGuid().ToString() + "_" + file.FileName;
+            var filePath = Path.Combine(uploadsFolder, uniqueFileName);
+
+            using (var stream = new FileStream(filePath, FileMode.Create))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            document.FileName = file.FileName;
+            document.Name = file.FileName;
+            document.FilePath = "uploads/" + uniqueFileName;
+            document.FileSize = file.Length;
+            document.MimeType = file.ContentType;
+            document.Version += 1;
+            document.UpdatedAt = DateTime.UtcNow;
+
+            var version = new DocumentVersion
+            {
+                DocumentId = document.Id,
+                FileName = file.FileName,
+                FilePath = document.FilePath,
+                FileSize = file.Length,
+                Sha256 = ComputeSha256(filePath),
+                UploadedByUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value,
+                CreatedAt = DateTime.UtcNow
+            };
+            _context.DocumentVersions.Add(version);
+
+            await _context.SaveChangesAsync();
+            await _documentIndexService.UpsertIndexAsync(document, filePath);
+            await _auditLogger.LogAsync(HttpContext, "document.version.upload", "Document", document.Id, $"Version={document.Version}");
+
+            return Ok(document);
+        }
+
+        // POST: api/Documents/reindex?limit=200&force=true
+        [HttpPost("reindex")]
+        public async Task<IActionResult> ReindexDocuments([FromQuery] int limit = 200, [FromQuery] bool force = false)
+        {
+            var indexed = await _documentIndexService.ReindexAllAsync(limit, force);
+            await _auditLogger.LogAsync(HttpContext, "document.reindex", "DocumentContentIndex", null, $"Count={indexed}, Force={force}");
+            return Ok(new { indexedCount = indexed });
         }
 
         // DELETE: api/Documents/5
@@ -366,6 +512,11 @@ namespace JurisFlow.Server.Controllers
             if (document == null)
             {
                 return NotFound();
+            }
+
+            if (string.Equals(document.Status, "Legal Hold", StringComparison.OrdinalIgnoreCase))
+            {
+                return BadRequest(new { message = "Document is on legal hold and cannot be deleted." });
             }
 
             // Optional: Delete physical file
@@ -397,5 +548,21 @@ namespace JurisFlow.Server.Controllers
 
             return NoContent();
         }
+    }
+
+    public class DocumentUpdateDto
+    {
+        public JsonElement? MatterId { get; set; }
+        public string? Description { get; set; }
+        public JsonElement? Tags { get; set; }
+        public string? Category { get; set; }
+        public string? Status { get; set; }
+        public string? LegalHoldReason { get; set; }
+    }
+
+    public class DocumentBulkAssignDto
+    {
+        public List<string> Ids { get; set; } = new();
+        public string? MatterId { get; set; }
     }
 }

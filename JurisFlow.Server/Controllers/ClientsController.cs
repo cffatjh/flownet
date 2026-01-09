@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.DTOs;
@@ -84,6 +85,15 @@ namespace JurisFlow.Server.Controllers
             }
 
             _context.Clients.Add(client);
+            _context.ClientStatusHistories.Add(new ClientStatusHistory
+            {
+                ClientId = client.Id,
+                PreviousStatus = "New",
+                NewStatus = client.Status,
+                ChangedByUserId = GetUserId(),
+                ChangedByName = GetUserEmail(),
+                CreatedAt = DateTime.UtcNow
+            });
             try
             {
                 await _context.SaveChangesAsync();
@@ -105,8 +115,43 @@ namespace JurisFlow.Server.Controllers
         {
             if (id != client.Id) return BadRequest();
 
-            client.UpdatedAt = DateTime.UtcNow;
-            _context.Entry(client).State = EntityState.Modified;
+            var existing = await _context.Clients.FindAsync(id);
+            if (existing == null) return NotFound();
+
+            var previousStatus = existing.Status;
+
+            existing.ClientNumber = client.ClientNumber;
+            existing.Name = client.Name;
+            existing.Email = client.Email;
+            existing.Phone = client.Phone;
+            existing.Mobile = client.Mobile;
+            existing.Company = client.Company;
+            existing.Type = client.Type;
+            existing.Status = client.Status;
+            existing.Address = client.Address;
+            existing.City = client.City;
+            existing.State = client.State;
+            existing.ZipCode = client.ZipCode;
+            existing.Country = client.Country;
+            existing.TaxId = client.TaxId;
+            existing.IncorporationState = client.IncorporationState;
+            existing.RegisteredAgent = client.RegisteredAgent;
+            existing.AuthorizedRepresentatives = client.AuthorizedRepresentatives;
+            existing.Notes = client.Notes;
+            existing.UpdatedAt = DateTime.UtcNow;
+
+            if (!string.Equals(previousStatus, existing.Status, StringComparison.OrdinalIgnoreCase))
+            {
+                _context.ClientStatusHistories.Add(new ClientStatusHistory
+                {
+                    ClientId = existing.Id,
+                    PreviousStatus = previousStatus ?? "Unknown",
+                    NewStatus = existing.Status ?? "Unknown",
+                    ChangedByUserId = GetUserId(),
+                    ChangedByName = GetUserEmail(),
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
 
             try
             {
@@ -120,6 +165,31 @@ namespace JurisFlow.Server.Controllers
 
             await _auditLogger.LogAsync(HttpContext, "client.update", "Client", client.Id, $"Updated client {client.Email}");
             return NoContent();
+        }
+
+        [HttpGet("{id}/status-history")]
+        public async Task<IActionResult> GetStatusHistory(string id)
+        {
+            var exists = await _context.Clients.AnyAsync(c => c.Id == id);
+            if (!exists) return NotFound();
+
+            var history = await _context.ClientStatusHistories
+                .Where(h => h.ClientId == id)
+                .OrderByDescending(h => h.CreatedAt)
+                .Select(h => new
+                {
+                    h.Id,
+                    h.ClientId,
+                    h.PreviousStatus,
+                    h.NewStatus,
+                    h.Notes,
+                    h.ChangedByUserId,
+                    h.ChangedByName,
+                    h.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(history);
         }
 
         // DELETE: api/Clients/5
@@ -139,6 +209,16 @@ namespace JurisFlow.Server.Controllers
         private bool ClientExists(string id)
         {
             return _context.Clients.Any(e => e.Id == id);
+        }
+
+        private string? GetUserId()
+        {
+            return User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
+        }
+
+        private string? GetUserEmail()
+        {
+            return User.FindFirst(ClaimTypes.Email)?.Value ?? User.FindFirst("email")?.Value;
         }
 
         // POST: api/Clients/{id}/set-password

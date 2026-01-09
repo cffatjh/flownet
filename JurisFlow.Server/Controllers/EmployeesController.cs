@@ -5,6 +5,7 @@ using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.DTOs;
+using JurisFlow.Server.Services;
 
 namespace JurisFlow.Server.Controllers
 {
@@ -15,18 +16,30 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly IWebHostEnvironment _env;
+        private readonly FirmStructureService _firmStructure;
 
-        public EmployeesController(JurisFlowDbContext context, IWebHostEnvironment env)
+        public EmployeesController(JurisFlowDbContext context, IWebHostEnvironment env, FirmStructureService firmStructure)
         {
             _context = context;
             _env = env;
+            _firmStructure = firmStructure;
         }
 
         // GET: api/Employees
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Employee>>> GetEmployees()
+        public async Task<ActionResult<IEnumerable<Employee>>> GetEmployees([FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            return await _context.Employees
+            var query = _context.Employees.AsQueryable();
+            if (!string.IsNullOrWhiteSpace(entityId))
+            {
+                query = query.Where(e => e.EntityId == entityId);
+            }
+            if (!string.IsNullOrWhiteSpace(officeId))
+            {
+                query = query.Where(e => e.OfficeId == officeId);
+            }
+
+            return await query
                 .Include(e => e.User)
                 .OrderBy(e => e.FirstName)
                 .ToListAsync();
@@ -105,6 +118,7 @@ namespace JurisFlow.Server.Controllers
             _context.Users.Add(user);
 
             // Now create the Employee linked to this User
+            var resolved = await _firmStructure.ResolveEntityOfficeAsync(dto.EntityId, dto.OfficeId);
             var employee = new Employee
             {
                 Id = Guid.NewGuid().ToString(),
@@ -122,6 +136,8 @@ namespace JurisFlow.Server.Controllers
                 Address = dto.Address,
                 EmergencyContact = dto.EmergencyContact,
                 EmergencyPhone = dto.EmergencyPhone,
+                EntityId = resolved.entityId,
+                OfficeId = resolved.officeId,
 
                 
                 // Bar License Mapping
@@ -181,6 +197,8 @@ namespace JurisFlow.Server.Controllers
             employee.Address = dto.Address;
             employee.EmergencyContact = dto.EmergencyContact;
             employee.EmergencyPhone = dto.EmergencyPhone;
+            if (!string.IsNullOrWhiteSpace(dto.EntityId)) employee.EntityId = dto.EntityId;
+            if (!string.IsNullOrWhiteSpace(dto.OfficeId)) employee.OfficeId = dto.OfficeId;
             
             // Update Bar License
             employee.BarNumber = dto.BarLicense?.BarNumber;

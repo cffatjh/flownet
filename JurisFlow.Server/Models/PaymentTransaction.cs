@@ -68,6 +68,12 @@ namespace JurisFlow.Server.Models
 
         public string? ProcessedBy { get; set; } // User ID
 
+        public string? PaymentPlanId { get; set; }
+
+        public DateTime? ScheduledFor { get; set; }
+
+        public string? Source { get; set; } // Manual, AutoPay, Plan
+
         public DateTime? ProcessedAt { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

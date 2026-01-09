@@ -402,6 +402,8 @@ export interface Employee {
   barJurisdiction?: string;
   barAdmissionDate?: string; // ISO String
   barStatus?: BarLicenseStatus;
+  entityId?: string;
+  officeId?: string;
   user?: {
     id?: string;
     avatar?: string;
@@ -473,6 +475,8 @@ export interface Matter {
   billableRate: number;
   trustBalance: number;
   courtType?: string;
+  entityId?: string;
+  officeId?: string;
   bailStatus?: 'None' | 'Set' | 'Posted' | 'Forfeited' | 'Exonerated' | 'Returned';
   bailAmount?: number;
   outcome?: string;
@@ -483,24 +487,44 @@ export interface Matter {
 
 export interface TimeEntry {
   id: string;
-  matterId: string;
+  matterId?: string;
   description: string;
   duration: number; // in minutes
   rate: number;
   date: string;
   billed: boolean;
+  isBillable?: boolean;
   type: 'time';
+  activityCode?: string;
+  taskCode?: string;
+  approvalStatus?: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
 }
 
 export interface Expense {
   id: string;
-  matterId: string;
+  matterId?: string;
   description: string;
   amount: number;
   date: string;
   category: 'Court Fee' | 'Travel' | 'Printing' | 'Research' | 'Expert' | 'Courier' | 'Other';
   billed: boolean;
   type: 'expense';
+  expenseCode?: string;
+  approvalStatus?: string;
+  submittedBy?: string;
+  submittedAt?: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  rejectedBy?: string;
+  rejectedAt?: string;
+  rejectionReason?: string;
 }
 
 // Fatura Durumu
@@ -569,6 +593,8 @@ export interface Invoice {
   client: Client;
   clientId: string;
   matterId?: string;
+  entityId?: string;
+  officeId?: string;
 
   // Tutarlar
   subtotal: number;
@@ -668,6 +694,10 @@ export interface DocumentFile {
   status?: string; // DocumentStatus enum value
   version?: number;
   uploadedBy?: string;
+  legalHoldReason?: string;
+  legalHoldPlacedAt?: string;
+  legalHoldReleasedAt?: string;
+  legalHoldPlacedBy?: string;
 }
 
 export interface Message {
@@ -858,6 +888,9 @@ export interface Payment {
   brand?: string;
   receiptUrl?: string;
   paidAt?: string;
+  paymentPlanId?: string;
+  scheduledFor?: string;
+  source?: string;
   createdAt: string;
 }
 
@@ -933,6 +966,9 @@ export interface ActiveTimer {
   isRunning: boolean;
   elapsed: number; // saved elapsed time if paused
   rate?: number;
+  activityCode?: string;
+  taskCode?: string;
+  isBillable?: boolean;
 }
 
 // ==============================
@@ -983,6 +1019,8 @@ export interface TrustBankAccount {
   jurisdiction: string; // State code
   currentBalance: number;
   status: TrustAccountStatus;
+  entityId?: string;
+  officeId?: string;
   createdAt: string;
   updatedAt: string;
   closedAt?: string;
@@ -999,6 +1037,8 @@ export interface ClientTrustLedger {
   trustAccount?: TrustBankAccount;
   runningBalance: number;
   status: LedgerStatus;
+  entityId?: string;
+  officeId?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -1014,6 +1054,8 @@ export interface TrustTransactionV2 {
   trustAccount?: TrustBankAccount;
   type: TrustTransactionTypeV2;
   amount: number;
+  entityId?: string;
+  officeId?: string;
 
   // Immutability
   isVoided: boolean;
@@ -1261,6 +1303,59 @@ export interface SecuritySettings {
   auditLoggingEnabled: boolean;
 }
 
+export type IntegrationStatus = 'connected' | 'pending' | 'disabled' | 'error';
+
+export interface IntegrationItem {
+  id: string;
+  provider: string;
+  category: 'Accounting' | 'Calendar' | 'Payments' | 'Email' | string;
+  status: IntegrationStatus;
+  accountLabel?: string;
+  accountEmail?: string;
+  syncEnabled?: boolean;
+  lastSyncAt?: string;
+  notes?: string;
+}
+
+export interface FirmEntity {
+  id: string;
+  name: string;
+  legalName?: string;
+  taxId?: string;
+  email?: string;
+  phone?: string;
+  website?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  country?: string;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  officeCount?: number;
+}
+
+export interface Office {
+  id: string;
+  entityId: string;
+  name: string;
+  code?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  zipCode?: string;
+  country?: string;
+  timeZone?: string;
+  isDefault: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 // Firm Settings Interface
 export interface FirmSettings {
   firmName: string;
@@ -1282,4 +1377,24 @@ export interface StaffPerformanceMetrics {
   utilizationRate: number;
   billableAmount: number;
   collectedAmount: number;
+}
+
+export interface PaymentPlan {
+  id: string;
+  clientId: string;
+  invoiceId?: string;
+  name: string;
+  totalAmount: number;
+  installmentAmount: number;
+  frequency: string;
+  startDate: string;
+  nextRunDate: string;
+  endDate?: string;
+  remainingAmount: number;
+  status: string;
+  autoPayEnabled: boolean;
+  autoPayMethod?: string;
+  autoPayReference?: string;
+  createdAt: string;
+  updatedAt: string;
 }

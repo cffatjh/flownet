@@ -5,6 +5,7 @@ using JurisFlow.Server.Data;
 using JurisFlow.Server.Enums;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using System.Globalization;
 using System.Text;
 
 namespace JurisFlow.Server.Controllers
@@ -16,11 +17,13 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly FirmStructureService _firmStructure;
 
-        public InvoicesController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public InvoicesController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _firmStructure = firmStructure;
         }
 
         private async Task<bool> IsPeriodLocked(DateTime date)
@@ -40,9 +43,21 @@ namespace JurisFlow.Server.Controllers
 
         // GET: api/Invoices
         [HttpGet]
-        public async Task<IActionResult> GetInvoices()
+        public async Task<IActionResult> GetInvoices([FromQuery] string? entityId, [FromQuery] string? officeId)
         {
-            var invoices = await _context.Invoices
+            var query = _context.Invoices.AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(entityId))
+            {
+                query = query.Where(i => i.EntityId == entityId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(officeId))
+            {
+                query = query.Where(i => i.OfficeId == officeId);
+            }
+
+            var invoices = await query
                 .Include(i => i.LineItems)
                 .OrderByDescending(i => i.IssueDate)
                 .ToListAsync();
@@ -67,12 +82,30 @@ namespace JurisFlow.Server.Controllers
                 return BadRequest(new { message = "Billing period is locked. Cannot create invoice." });
             }
 
+            var billingSettings = await GetBillingSettingsAsync();
+            var invoiceNumber = string.IsNullOrWhiteSpace(dto.Number)
+                ? await GenerateInvoiceNumberAsync(billingSettings.InvoicePrefix)
+                : dto.Number;
+
+            if (billingSettings.UtbmsCodesRequired && dto.LineItems != null)
+            {
+                var issues = GetUtbmsIssues(dto.LineItems);
+                if (issues.Count > 0)
+                {
+                    return BadRequest(new { message = "UTBMS codes are required for this invoice.", issues });
+                }
+            }
+
+            var (resolvedEntityId, resolvedOfficeId) = await _firmStructure.ResolveEntityOfficeFromMatterAsync(dto.MatterId, dto.EntityId, dto.OfficeId);
+
             var invoice = new Invoice
             {
                 Id = Guid.NewGuid().ToString(),
-                Number = dto.Number,
+                Number = invoiceNumber,
                 ClientId = dto.ClientId,
                 MatterId = dto.MatterId,
+                EntityId = resolvedEntityId,
+                OfficeId = resolvedOfficeId,
                 Status = dto.Status ?? InvoiceStatus.Draft,
                 IssueDate = dto.IssueDate ?? DateTime.UtcNow,
                 DueDate = dto.DueDate,
@@ -95,9 +128,9 @@ namespace JurisFlow.Server.Controllers
                         Quantity = li.Quantity ?? 1,
                         Rate = li.Rate ?? 0,
                         Amount = (li.Quantity ?? 1) * (li.Rate ?? 0),
-                        TaskCode = li.TaskCode,
-                        ExpenseCode = li.ExpenseCode,
-                        ActivityCode = li.ActivityCode,
+                        TaskCode = NormalizeUtbmsCode(li.TaskCode),
+                        ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
+                        ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     });
@@ -128,6 +161,8 @@ namespace JurisFlow.Server.Controllers
             if (!string.IsNullOrWhiteSpace(dto.Number)) invoice.Number = dto.Number;
             if (!string.IsNullOrWhiteSpace(dto.ClientId)) invoice.ClientId = dto.ClientId;
             if (!string.IsNullOrWhiteSpace(dto.MatterId)) invoice.MatterId = dto.MatterId;
+            if (!string.IsNullOrWhiteSpace(dto.EntityId)) invoice.EntityId = dto.EntityId;
+            if (!string.IsNullOrWhiteSpace(dto.OfficeId)) invoice.OfficeId = dto.OfficeId;
             if (dto.Status.HasValue) invoice.Status = dto.Status.Value;
             if (dto.IssueDate.HasValue) invoice.IssueDate = dto.IssueDate.Value;
             if (dto.DueDate.HasValue) invoice.DueDate = dto.DueDate.Value;
@@ -139,6 +174,16 @@ namespace JurisFlow.Server.Controllers
             // Replace line items if provided
             if (dto.LineItems != null)
             {
+                var billingSettings = await GetBillingSettingsAsync();
+                if (billingSettings.UtbmsCodesRequired)
+                {
+                    var issues = GetUtbmsIssues(dto.LineItems);
+                    if (issues.Count > 0)
+                    {
+                        return BadRequest(new { message = "UTBMS codes are required for this invoice.", issues });
+                    }
+                }
+
                 _context.InvoiceLineItems.RemoveRange(invoice.LineItems);
                 invoice.LineItems.Clear();
                 foreach (var li in dto.LineItems)
@@ -152,9 +197,9 @@ namespace JurisFlow.Server.Controllers
                         Quantity = li.Quantity ?? 1,
                         Rate = li.Rate ?? 0,
                         Amount = (li.Quantity ?? 1) * (li.Rate ?? 0),
-                        TaskCode = li.TaskCode,
-                        ExpenseCode = li.ExpenseCode,
-                        ActivityCode = li.ActivityCode,
+                        TaskCode = NormalizeUtbmsCode(li.TaskCode),
+                        ExpenseCode = NormalizeUtbmsCode(li.ExpenseCode),
+                        ActivityCode = NormalizeUtbmsCode(li.ActivityCode),
                         CreatedAt = DateTime.UtcNow,
                         UpdatedAt = DateTime.UtcNow
                     });
@@ -212,24 +257,52 @@ namespace JurisFlow.Server.Controllers
             var invoice = await _context.Invoices.Include(i => i.LineItems).FirstOrDefaultAsync(i => i.Id == id);
             if (invoice == null) return NotFound();
 
-            // Simple LEDES 1998B-like export (stub) - commas replaced with pipes to keep safe
+            var billingSettings = await GetBillingSettingsAsync();
+            if (!billingSettings.LedesEnabled)
+            {
+                return BadRequest(new { message = "LEDES export is disabled in billing settings." });
+            }
+
+            if (billingSettings.UtbmsCodesRequired)
+            {
+                var issues = GetUtbmsIssues(invoice.LineItems.Select(li => new InvoiceLineItemDto
+                {
+                    Type = li.Type,
+                    Description = li.Description,
+                    Quantity = li.Quantity,
+                    Rate = li.Rate,
+                    TaskCode = li.TaskCode,
+                    ExpenseCode = li.ExpenseCode,
+                    ActivityCode = li.ActivityCode
+                }).ToList());
+                if (issues.Count > 0)
+                {
+                    return BadRequest(new { message = "UTBMS codes are required before exporting LEDES.", issues });
+                }
+            }
+
+            var firmSettings = await GetFirmSettingsAsync();
+            var lawFirmId = string.IsNullOrWhiteSpace(firmSettings.LedesFirmId) ? "JF-DEFAULT" : firmSettings.LedesFirmId;
+            var firmName = string.IsNullOrWhiteSpace(firmSettings.FirmName) ? "JurisFlow" : firmSettings.FirmName;
+
+            // LEDES 1998B export (pipe-delimited)
             var sb = new StringBuilder();
-            sb.AppendLine("INVOICE_DATE,INVOICE_NUMBER,CLIENT_ID,MATTER_ID,INVOICE_TOTAL");
-            sb.AppendLine($"{invoice.IssueDate:yyyyMMdd},{invoice.Number},{invoice.ClientId},{invoice.MatterId},{invoice.Total:F2}");
-            sb.AppendLine("LINE_ITEM_NUMBER,LINE_ITEM_DATE,TASK_CODE,EXPENSE_CODE,ACTIVITY_CODE,LINE_ITEM_DESCRIPTION,LINE_ITEM_UNIT_COST,LINE_ITEM_UNITS,LINE_ITEM_FEE");
+            sb.AppendLine("INVOICE_DATE|INVOICE_NUMBER|CLIENT_ID|LAW_FIRM_ID|LAW_FIRM_NAME|MATTER_ID|INVOICE_TOTAL");
+            sb.AppendLine($"{invoice.IssueDate:yyyyMMdd}|{invoice.Number}|{invoice.ClientId}|{lawFirmId}|{firmName}|{invoice.MatterId}|{invoice.Total.ToString("F2", CultureInfo.InvariantCulture)}");
+            sb.AppendLine("LINE_ITEM_NUMBER|LINE_ITEM_DATE|TASK_CODE|ACTIVITY_CODE|EXPENSE_CODE|LINE_ITEM_DESCRIPTION|LINE_ITEM_UNIT_COST|LINE_ITEM_UNITS|LINE_ITEM_TOTAL");
 
             int lineNo = 1;
             foreach (var li in invoice.LineItems)
             {
-                var desc = (li.Description ?? string.Empty).Replace(",", ";");
+                var desc = (li.Description ?? string.Empty).Replace("|", "/");
                 var units = li.Quantity;
                 var unitCost = li.Rate;
                 var fee = li.Amount;
-                sb.AppendLine($"{lineNo},{invoice.IssueDate:yyyyMMdd},{li.TaskCode},{li.ExpenseCode},{li.ActivityCode},{desc},{unitCost:F2},{units:F2},{fee:F2}");
+                sb.AppendLine($"{lineNo}|{invoice.IssueDate:yyyyMMdd}|{NormalizeUtbmsCode(li.TaskCode)}|{NormalizeUtbmsCode(li.ActivityCode)}|{NormalizeUtbmsCode(li.ExpenseCode)}|{desc}|{unitCost.ToString("F2", CultureInfo.InvariantCulture)}|{units.ToString("F2", CultureInfo.InvariantCulture)}|{fee.ToString("F2", CultureInfo.InvariantCulture)}");
                 lineNo++;
             }
 
-            return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/plain", $"invoice_{invoice.Number ?? invoice.Id}_ledes.txt");
+            return File(Encoding.UTF8.GetBytes(sb.ToString()), "text/plain", $"invoice_{invoice.Number ?? invoice.Id}_ledes.dat");
         }
 
         // POST: api/Invoices/{id}/write-off
@@ -293,6 +366,86 @@ namespace JurisFlow.Server.Controllers
 
             return NoContent();
         }
+
+        private async Task<BillingSettings> GetBillingSettingsAsync()
+        {
+            var settings = await _context.BillingSettings.FirstOrDefaultAsync();
+            if (settings == null)
+            {
+                settings = new BillingSettings();
+                _context.BillingSettings.Add(settings);
+                await _context.SaveChangesAsync();
+            }
+            return settings;
+        }
+
+        private async Task<FirmSettings> GetFirmSettingsAsync()
+        {
+            var settings = await _context.FirmSettings.FirstOrDefaultAsync();
+            if (settings == null)
+            {
+                settings = new FirmSettings();
+                _context.FirmSettings.Add(settings);
+                await _context.SaveChangesAsync();
+            }
+            return settings;
+        }
+
+        private async Task<string> GenerateInvoiceNumberAsync(string prefix)
+        {
+            var normalized = string.IsNullOrWhiteSpace(prefix) ? "INV-" : prefix.Trim();
+            if (!normalized.EndsWith("-", StringComparison.Ordinal))
+            {
+                normalized += "-";
+            }
+
+            var year = DateTime.UtcNow.Year;
+            var yearPrefix = $"{normalized}{year}-";
+            var count = await _context.Invoices.CountAsync(i => i.Number != null && i.Number.StartsWith(yearPrefix));
+            return $"{yearPrefix}{(count + 1).ToString("D4", CultureInfo.InvariantCulture)}";
+        }
+
+        private List<string> GetUtbmsIssues(IEnumerable<InvoiceLineItemDto> lineItems)
+        {
+            var issues = new List<string>();
+            var lineNumber = 1;
+
+            foreach (var item in lineItems)
+            {
+                var type = (item.Type ?? string.Empty).Trim().ToLowerInvariant();
+                var taskCode = NormalizeUtbmsCode(item.TaskCode);
+                var activityCode = NormalizeUtbmsCode(item.ActivityCode);
+                var expenseCode = NormalizeUtbmsCode(item.ExpenseCode);
+
+                if (type == "time")
+                {
+                    if (string.IsNullOrWhiteSpace(activityCode))
+                    {
+                        issues.Add($"Line {lineNumber}: Activity code is required for time entries.");
+                    }
+                }
+
+                if (type == "expense")
+                {
+                    if (string.IsNullOrWhiteSpace(expenseCode))
+                    {
+                        issues.Add($"Line {lineNumber}: Expense code is required for expense entries.");
+                    }
+                }
+
+                lineNumber++;
+            }
+
+            return issues;
+        }
+
+        private string? NormalizeUtbmsCode(string? code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return null;
+            var trimmed = code.Trim();
+            var split = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            return split.Length > 0 ? split[0].Trim() : trimmed;
+        }
     }
 
     // DTOs
@@ -312,6 +465,8 @@ namespace JurisFlow.Server.Controllers
         public string? Number { get; set; }
         public string ClientId { get; set; } = string.Empty;
         public string? MatterId { get; set; }
+        public string? EntityId { get; set; }
+        public string? OfficeId { get; set; }
         public InvoiceStatus? Status { get; set; }
         public DateTime? IssueDate { get; set; }
         public DateTime? DueDate { get; set; }

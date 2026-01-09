@@ -175,6 +175,8 @@ namespace JurisFlow.Server.Controllers
                 return NotFound(new { message = "Client not found" });
             }
 
+            var previousStatus = client.Status;
+
             if (!string.IsNullOrEmpty(dto.Name))
                 client.Name = dto.Name;
             if (!string.IsNullOrEmpty(dto.Email))
@@ -191,6 +193,24 @@ namespace JurisFlow.Server.Controllers
                 client.Type = dto.Type;
             if (!string.IsNullOrEmpty(dto.Mobile))
                 client.Mobile = dto.Mobile;
+
+            client.UpdatedAt = DateTime.UtcNow;
+
+            if (!string.Equals(previousStatus, client.Status, StringComparison.OrdinalIgnoreCase))
+            {
+                var changedById = User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
+                var changedByName = User.FindFirst(ClaimTypes.Email)?.Value ?? User.FindFirst("email")?.Value;
+                _context.ClientStatusHistories.Add(new ClientStatusHistory
+                {
+                    ClientId = client.Id,
+                    PreviousStatus = previousStatus ?? "Unknown",
+                    NewStatus = client.Status ?? "Unknown",
+                    Notes = string.IsNullOrWhiteSpace(dto.StatusChangeNote) ? null : dto.StatusChangeNote,
+                    ChangedByUserId = changedById,
+                    ChangedByName = changedByName,
+                    CreatedAt = DateTime.UtcNow
+                });
+            }
 
             await _context.SaveChangesAsync();
 
@@ -350,6 +370,7 @@ namespace JurisFlow.Server.Controllers
         public string? Type { get; set; }
         public string? Status { get; set; }
         public bool? PortalEnabled { get; set; }
+        public string? StatusChangeNote { get; set; }
     }
 
     public class CreateBillingLockDto

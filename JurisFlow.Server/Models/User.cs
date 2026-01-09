@@ -34,6 +34,11 @@ namespace JurisFlow.Server.Models
         public string? Preferences { get; set; } // JSON string
         public string? NotificationPreferences { get; set; } // JSON string
         public string? EmployeeRole { get; set; }
+        public bool MfaEnabled { get; set; } = false;
+        public string? MfaSecret { get; set; }
+        public string? MfaBackupCodesJson { get; set; }
+        public DateTime? MfaVerifiedAt { get; set; }
+        public DateTime? MfaLastUsedAt { get; set; }
 
         public DateTime? CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }

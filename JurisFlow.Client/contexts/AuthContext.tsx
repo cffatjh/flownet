@@ -12,9 +12,18 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<LoginResult>;
+  verifyMfa: (challengeId: string, code: string) => Promise<LoginResult>;
   logout: () => void;
   can: (permission: Permission) => boolean;
+}
+
+interface LoginResult {
+  success: boolean;
+  mfaRequired?: boolean;
+  challengeId?: string;
+  challengeExpiresAt?: string;
+  error?: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -32,6 +41,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:28', message: 'AuthProvider initialization started', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
   // #endregion
   const [user, setUser] = useState<User | null>(null);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
+
+  const storeSession = (session?: { id?: string; expiresAt?: string }) => {
+    if (typeof window === 'undefined') return;
+    if (!session?.id || !session.expiresAt) return;
+    localStorage.setItem('auth_session_id', session.id);
+    localStorage.setItem('auth_session_expires_at', session.expiresAt);
+    setSessionExpiresAt(session.expiresAt);
+  };
 
   const can = (permission: Permission): boolean => {
     if (!user) return false;
@@ -47,7 +65,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     return permissions.includes(permission);
   };
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string): Promise<LoginResult> => {
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:34', message: 'Login attempt started', data: { email }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
     // #endregion
@@ -69,35 +87,84 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:53', message: 'Login failed - response not ok', data: { status: res.status, statusText: res.statusText }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
         // #endregion
-        return false;
+        return { success: false, error: 'Login failed' };
       }
       const data = await res.json();
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:59', message: 'Login succeeded', data: { hasToken: !!data.token, hasUser: !!data.user, userRole: data.user?.role }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
       // #endregion
+      if (data?.mfaRequired) {
+        return {
+          success: false,
+          mfaRequired: true,
+          challengeId: data.challengeId,
+          challengeExpiresAt: data.challengeExpiresAt
+        };
+      }
+
       setUser(data.user);
       if (typeof window !== 'undefined') {
         localStorage.setItem('auth_token', data.token);
         localStorage.setItem('auth_user', JSON.stringify(data.user));
+        storeSession(data.session);
       }
-      return true;
+      return { success: true };
     } catch (e) {
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:70', message: 'Login exception', data: { errorMessage: e instanceof Error ? e.message : String(e), errorName: e instanceof Error ? e.name : 'Unknown', errorStack: e instanceof Error ? e.stack : undefined }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'E' }) }).catch(() => { });
       // #endregion
       console.error('Login failed', e);
-      return false;
+      return { success: false, error: 'Login failed' };
     }
   };
 
-  const logout = () => {
+  const verifyMfa = async (challengeId: string, code: string): Promise<LoginResult> => {
+    try {
+      const API_URL = typeof window !== 'undefined' ? '/api' : 'http://localhost:3001/api';
+      const res = await fetch(`${API_URL}/mfa/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId, code })
+      });
+      if (!res.ok) {
+        return { success: false, error: 'Invalid code' };
+      }
+      const data = await res.json();
+      setUser(data.user);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('auth_token', data.token);
+        localStorage.setItem('auth_user', JSON.stringify(data.user));
+        storeSession(data.session);
+      }
+      return { success: true };
+    } catch (e) {
+      console.error('MFA verify failed', e);
+      return { success: false, error: 'MFA verify failed' };
+    }
+  };
+
+  const logout = async () => {
     // #region agent log
     fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:77', message: 'Logout called', data: { hasUser: !!user, userEmail: user?.email }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
     // #endregion
+    try {
+      if (typeof window !== 'undefined' && localStorage.getItem('auth_token')) {
+        const API_URL = '/api';
+        await fetch(`${API_URL}/security/sessions/revoke-current`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${localStorage.getItem('auth_token')}` }
+        });
+      }
+    } catch {
+      // Ignore logout revoke errors
+    }
     setUser(null);
     if (typeof window !== 'undefined') {
       localStorage.removeItem('auth_token');
       localStorage.removeItem('auth_user');
+      localStorage.removeItem('auth_session_id');
+      localStorage.removeItem('auth_session_expires_at');
+      setSessionExpiresAt(null);
       // #region agent log
       fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:83', message: 'Logout completed - localStorage cleared', data: { hasToken: !!localStorage.getItem('auth_token'), hasUser: !!localStorage.getItem('auth_user') }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
       // #endregion
@@ -117,6 +184,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (token && storedUser) {
         try {
           setUser(JSON.parse(storedUser));
+          const storedSessionExpiresAt = localStorage.getItem('auth_session_expires_at');
+          if (storedSessionExpiresAt) {
+            setSessionExpiresAt(storedSessionExpiresAt);
+          }
           // #region agent log
           fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:67', message: 'AuthProvider user restored from localStorage', data: {}, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
           // #endregion
@@ -130,11 +201,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
+  React.useEffect(() => {
+    if (!sessionExpiresAt) return;
+    const expiresAt = new Date(sessionExpiresAt).getTime();
+    if (Number.isNaN(expiresAt)) return;
+    const delay = Math.max(0, expiresAt - Date.now());
+    if (delay === 0) {
+      logout();
+      return;
+    }
+    const timer = window.setTimeout(() => logout(), delay);
+    return () => window.clearTimeout(timer);
+  }, [sessionExpiresAt]);
+
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUnauthorized = () => {
+      logout();
+    };
+    window.addEventListener('auth:unauthorized', handleUnauthorized as EventListener);
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorized as EventListener);
+  }, []);
+
   // #region agent log
   fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'AuthContext.tsx:74', message: 'AuthProvider returning JSX', data: { userExists: !!user, isAuthenticated: !!user }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'B' }) }).catch(() => { });
   // #endregion
   return (
-    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, logout, can }}>
+    <AuthContext.Provider value={{ user, isAuthenticated: !!user, login, verifyMfa, logout, can }}>
       {children}
     </AuthContext.Provider>
   );

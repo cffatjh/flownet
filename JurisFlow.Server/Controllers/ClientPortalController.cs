@@ -20,12 +20,16 @@ namespace JurisFlow.Server.Controllers
         private readonly JurisFlowDbContext _context;
         private readonly IWebHostEnvironment _env;
         private readonly AuditLogger _auditLogger;
+        private readonly PaymentPlanService _paymentPlanService;
+        private readonly DocumentIndexService _documentIndexService;
 
-        public ClientPortalController(JurisFlowDbContext context, IWebHostEnvironment env, AuditLogger auditLogger)
+        public ClientPortalController(JurisFlowDbContext context, IWebHostEnvironment env, AuditLogger auditLogger, PaymentPlanService paymentPlanService, DocumentIndexService documentIndexService)
         {
             _context = context;
             _env = env;
             _auditLogger = auditLogger;
+            _paymentPlanService = paymentPlanService;
+            _documentIndexService = documentIndexService;
         }
 
         [HttpGet("matters")]
@@ -213,6 +217,7 @@ namespace JurisFlow.Server.Controllers
             _context.DocumentVersions.Add(version);
             await _context.SaveChangesAsync();
 
+            await _documentIndexService.UpsertIndexAsync(document, filePath);
             await _auditLogger.LogAsync(HttpContext, "client.document.upload", "Document", document.Id, $"MatterId={matterId}, Name={file.FileName}");
 
             return Ok(new
@@ -308,6 +313,125 @@ namespace JurisFlow.Server.Controllers
                 zipCode = client.ZipCode,
                 country = client.Country
             });
+        }
+
+        [HttpGet("payment-plans")]
+        public async Task<IActionResult> GetPaymentPlans()
+        {
+            if (!TryGetClientId(out var clientId)) return Unauthorized();
+
+            var plans = await _context.PaymentPlans
+                .Where(p => p.ClientId == clientId)
+                .OrderByDescending(p => p.CreatedAt)
+                .ToListAsync();
+
+            return Ok(plans);
+        }
+
+        [HttpPost("payment-plans")]
+        public async Task<IActionResult> CreatePaymentPlan([FromBody] ClientPaymentPlanCreateDto dto)
+        {
+            if (!TryGetClientId(out var clientId)) return Unauthorized();
+
+            if (dto.InstallmentAmount <= 0)
+            {
+                return BadRequest(new { message = "Installment amount must be positive." });
+            }
+
+            Invoice? invoice = null;
+            if (!string.IsNullOrWhiteSpace(dto.InvoiceId))
+            {
+                invoice = await _context.Invoices.FirstOrDefaultAsync(i => i.Id == dto.InvoiceId && i.ClientId == clientId);
+                if (invoice == null)
+                {
+                    return BadRequest(new { message = "Invoice not found." });
+                }
+            }
+
+            var total = dto.TotalAmount ?? (invoice?.Balance ?? 0);
+            if (total <= 0)
+            {
+                return BadRequest(new { message = "Total amount must be greater than 0." });
+            }
+
+            if (dto.InstallmentAmount > total + 0.01)
+            {
+                return BadRequest(new { message = "Installment amount cannot exceed total amount." });
+            }
+
+            if (dto.AutoPayEnabled && string.IsNullOrWhiteSpace(dto.AutoPayMethod))
+            {
+                return BadRequest(new { message = "AutoPay method is required when AutoPay is enabled." });
+            }
+
+            var startDate = dto.StartDate ?? DateTime.UtcNow;
+            var plan = new PaymentPlan
+            {
+                Id = Guid.NewGuid().ToString(),
+                ClientId = clientId,
+                InvoiceId = dto.InvoiceId,
+                Name = string.IsNullOrWhiteSpace(dto.Name) ? $"Payment Plan {DateTime.UtcNow:yyyyMMdd}" : dto.Name.Trim(),
+                TotalAmount = total,
+                InstallmentAmount = dto.InstallmentAmount,
+                Frequency = string.IsNullOrWhiteSpace(dto.Frequency) ? "Monthly" : dto.Frequency.Trim(),
+                StartDate = startDate,
+                NextRunDate = startDate,
+                RemainingAmount = total,
+                Status = "Active",
+                AutoPayEnabled = dto.AutoPayEnabled,
+                AutoPayMethod = dto.AutoPayMethod,
+                AutoPayReference = dto.AutoPayReference,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+
+            _context.PaymentPlans.Add(plan);
+            await _context.SaveChangesAsync();
+
+            await _auditLogger.LogAsync(HttpContext, "client.payment_plan.create", "PaymentPlan", plan.Id, $"ClientId={clientId}, Total={plan.TotalAmount}");
+
+            return Ok(plan);
+        }
+
+        [HttpPut("payment-plans/{id}")]
+        public async Task<IActionResult> UpdatePaymentPlan(string id, [FromBody] ClientPaymentPlanUpdateDto dto)
+        {
+            if (!TryGetClientId(out var clientId)) return Unauthorized();
+
+            var plan = await _context.PaymentPlans.FirstOrDefaultAsync(p => p.Id == id && p.ClientId == clientId);
+            if (plan == null) return NotFound();
+
+            if (!string.IsNullOrWhiteSpace(dto.Name)) plan.Name = dto.Name.Trim();
+            if (!string.IsNullOrWhiteSpace(dto.Status)) plan.Status = dto.Status;
+            if (dto.AutoPayEnabled.HasValue) plan.AutoPayEnabled = dto.AutoPayEnabled.Value;
+            if (dto.AutoPayMethod != null) plan.AutoPayMethod = dto.AutoPayMethod;
+            if (dto.AutoPayReference != null) plan.AutoPayReference = dto.AutoPayReference;
+
+            plan.UpdatedAt = DateTime.UtcNow;
+            await _context.SaveChangesAsync();
+
+            await _auditLogger.LogAsync(HttpContext, "client.payment_plan.update", "PaymentPlan", plan.Id, $"Status={plan.Status}, AutoPay={plan.AutoPayEnabled}");
+
+            return Ok(plan);
+        }
+
+        [HttpPost("payment-plans/{id}/run")]
+        public async Task<IActionResult> RunPaymentPlan(string id)
+        {
+            if (!TryGetClientId(out var clientId)) return Unauthorized();
+
+            var plan = await _context.PaymentPlans.FirstOrDefaultAsync(p => p.Id == id && p.ClientId == clientId);
+            if (plan == null) return NotFound();
+
+            var client = await _context.Clients.FindAsync(clientId);
+            var transaction = await _paymentPlanService.RunPlanAsync(plan, clientId, client?.Email, client?.Name);
+            if (transaction == null)
+            {
+                return BadRequest(new { message = "Payment plan is not active or has no remaining balance." });
+            }
+
+            await _auditLogger.LogAsync(HttpContext, "client.payment_plan.run", "PaymentPlan", plan.Id, $"Amount={transaction.Amount}");
+            return Ok(new { plan, transaction });
         }
 
         [HttpGet("signatures")]
@@ -544,6 +668,28 @@ namespace JurisFlow.Server.Controllers
         public int Duration { get; set; } = 30;
         public string? Type { get; set; }
         public string? Notes { get; set; }
+    }
+
+    public class ClientPaymentPlanCreateDto
+    {
+        public string? InvoiceId { get; set; }
+        public string? Name { get; set; }
+        public double? TotalAmount { get; set; }
+        public double InstallmentAmount { get; set; }
+        public string? Frequency { get; set; }
+        public DateTime? StartDate { get; set; }
+        public bool AutoPayEnabled { get; set; } = false;
+        public string? AutoPayMethod { get; set; }
+        public string? AutoPayReference { get; set; }
+    }
+
+    public class ClientPaymentPlanUpdateDto
+    {
+        public string? Name { get; set; }
+        public string? Status { get; set; }
+        public bool? AutoPayEnabled { get; set; }
+        public string? AutoPayMethod { get; set; }
+        public string? AutoPayReference { get; set; }
     }
 }
 

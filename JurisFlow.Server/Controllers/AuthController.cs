@@ -30,7 +30,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost("login")]
         public async Task<IActionResult> Login([FromBody] LoginDto loginDto)
         {
-            Console.WriteLine($"[LOGIN ATTEMPT] Email: {loginDto.Email}, Password: {loginDto.Password}");
+            Console.WriteLine($"[LOGIN ATTEMPT] Email: {loginDto.Email}");
 
             if (!ModelState.IsValid)
             {
@@ -57,11 +57,42 @@ namespace JurisFlow.Server.Controllers
                 return Unauthorized(new { message = "Invalid credentials" });
             }
 
-            var token = GenerateJwtToken(user);
+            var mfaEnforced = _configuration.GetValue("Security:MfaEnforced", true);
+            if (mfaEnforced && user.MfaEnabled && !string.IsNullOrEmpty(user.MfaSecret))
+            {
+                var challengeMinutes = _configuration.GetValue("Security:MfaChallengeMinutes", 10);
+                var challenge = new MfaChallenge
+                {
+                    UserId = user.Id,
+                    ExpiresAt = DateTime.UtcNow.AddMinutes(challengeMinutes),
+                    IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    UserAgent = HttpContext.Request.Headers.UserAgent.ToString()
+                };
+
+                _context.MfaChallenges.Add(challenge);
+                await _context.SaveChangesAsync();
+
+                await _auditLogger.LogAsync(HttpContext, "auth.login.mfa_required", "User", user.Id, $"Email: {user.Email}");
+
+                return Ok(new
+                {
+                    mfaRequired = true,
+                    challengeId = challenge.Id,
+                    challengeExpiresAt = challenge.ExpiresAt
+                });
+            }
+
+            var session = await CreateSessionAsync(user.Id, "User");
+            var token = GenerateJwtToken(user, session.Id, session.ExpiresAt);
 
             var response = new
             {
                 token,
+                session = new
+                {
+                    id = session.Id,
+                    expiresAt = session.ExpiresAt
+                },
                 user = new
                 {
                     id = user.Id,
@@ -76,7 +107,26 @@ namespace JurisFlow.Server.Controllers
             return Ok(response);
         }
 
-        private string GenerateJwtToken(User user)
+        private async Task<AuthSession> CreateSessionAsync(string userId, string subjectType)
+        {
+            var sessionMinutes = _configuration.GetValue("Security:SessionTimeoutMinutes", 480);
+            var session = new AuthSession
+            {
+                UserId = userId,
+                SubjectType = subjectType,
+                CreatedAt = DateTime.UtcNow,
+                LastSeenAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(sessionMinutes),
+                IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                UserAgent = HttpContext.Request.Headers.UserAgent.ToString()
+            };
+
+            _context.AuthSessions.Add(session);
+            await _context.SaveChangesAsync();
+            return session;
+        }
+
+        private string GenerateJwtToken(User user, string sessionId, DateTime expiresAt)
         {
             var jwtKey = _configuration["Jwt:Key"];
             var jwtIssuer = _configuration["Jwt:Issuer"];
@@ -93,16 +143,18 @@ namespace JurisFlow.Server.Controllers
             var claims = new[]
             {
                 new Claim(JwtRegisteredClaimNames.Sub, user.Id),
+                new Claim(ClaimTypes.NameIdentifier, user.Id),
                 new Claim(JwtRegisteredClaimNames.Email, user.Email),
                 new Claim(ClaimTypes.Role, user.Role),
-                new Claim("role", user.Role) // Additional claim for ease of use
+                new Claim("role", user.Role),
+                new Claim("sid", sessionId)
             };
 
             var token = new JwtSecurityToken(
                 issuer: jwtIssuer,
                 audience: jwtAudience,
                 claims: claims,
-                expires: DateTime.Now.AddDays(7),
+                expires: expiresAt,
                 signingCredentials: credentials);
 
             return new JwtSecurityTokenHandler().WriteToken(token);

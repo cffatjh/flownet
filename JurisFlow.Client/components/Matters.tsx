@@ -8,6 +8,7 @@ import mammoth from 'mammoth';
 import { toast } from './Toast';
 import { Combobox } from './common/Combobox';
 import ClientSelectorModal from './ClientSelectorModal';
+import EntityOfficeFilter from './common/EntityOfficeFilter';
 
 const API_BASE_URL = ''; // Use proxy for both api and uploads
 
@@ -26,6 +27,8 @@ const Matters: React.FC = () => {
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [showClientSelector, setShowClientSelector] = useState(false);
   const [selectedPartyName, setSelectedPartyName] = useState('');
+  const [entityFilter, setEntityFilter] = useState('');
+  const [officeFilter, setOfficeFilter] = useState('');
   const [newClientData, setNewClientData] = useState({
     name: '',
     email: '',
@@ -68,6 +71,8 @@ const Matters: React.FC = () => {
     bailStatus: 'None',
     bailAmount: '' as string | number,
     outcome: '',
+    entityId: '',
+    officeId: '',
     // Opposing Party
     opposingPartyName: '',
     opposingPartyType: 'Individual' as 'Individual' | 'Corporation' | 'Government',
@@ -79,6 +84,9 @@ const Matters: React.FC = () => {
 
   // US Court Types from enum
   const courtOptions = Object.values(CourtType);
+
+  const formEntityId = editData?.entityId ?? formData.entityId;
+  const formOfficeId = editData?.officeId ?? formData.officeId;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -117,14 +125,18 @@ const Matters: React.FC = () => {
       courtType: formData.courtType,
       bailStatus: formData.bailStatus as any,
       bailAmount: formData.bailAmount ? parseFloat(String(formData.bailAmount)) : 0,
-      outcome: formData.outcome
+      outcome: formData.outcome,
+      entityId: formData.entityId || undefined,
+      officeId: formData.officeId || undefined
     };
     addMatter({
       ...newMatter,
       clientId: selectedClient?.id,
       clientName: resolvedClient.name,
       client: resolvedClient,
-      sourceLeadId: selectedLead?.id
+      sourceLeadId: selectedLead?.id,
+      entityId: formData.entityId || undefined,
+      officeId: formData.officeId || undefined
     });
     setShowModal(false);
     setFormData({
@@ -139,6 +151,8 @@ const Matters: React.FC = () => {
       bailStatus: 'None',
       bailAmount: '',
       outcome: '',
+      entityId: '',
+      officeId: '',
       opposingPartyName: '',
       opposingPartyType: 'Individual',
       opposingPartyCompany: '',
@@ -266,7 +280,9 @@ const Matters: React.FC = () => {
     const q = search.toLowerCase();
     const matchesQuery = [m.name, m.client.name, m.caseNumber].some(v => v?.toLowerCase().includes(q));
     const matchesStatus = statusFilter === 'all' ? true : m.status === statusFilter;
-    return matchesQuery && matchesStatus;
+    const matchesEntity = !entityFilter || m.entityId === entityFilter;
+    const matchesOffice = !officeFilter || m.officeId === officeFilter;
+    return matchesQuery && matchesStatus && matchesEntity && matchesOffice;
   });
 
   return (
@@ -288,7 +304,7 @@ const Matters: React.FC = () => {
       </div>
 
       {/* Filters & Search Toolbar */}
-      <div className="bg-white p-2 rounded-xl border border-gray-200 shadow-sm mb-6 flex gap-3 items-center">
+      <div className="bg-white p-2 rounded-xl border border-gray-200 shadow-sm mb-6 flex flex-wrap gap-3 items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
           <input
@@ -313,6 +329,13 @@ const Matters: React.FC = () => {
             ))}
           </select>
         </div>
+        <EntityOfficeFilter
+          entityId={entityFilter}
+          officeId={officeFilter}
+          onEntityChange={setEntityFilter}
+          onOfficeChange={setOfficeFilter}
+          allowAll
+        />
       </div>
 
       {/* Data Table */}
@@ -568,7 +591,9 @@ const Matters: React.FC = () => {
                   courtType: editData.courtType,
                   bailStatus: editData.bailStatus,
                   bailAmount: editData.bailAmount,
-                  outcome: editData.outcome
+                  outcome: editData.outcome,
+                  entityId: editData.entityId,
+                  officeId: editData.officeId
                 });
                 setShowModal(false);
                 setEditData(null);
@@ -581,6 +606,27 @@ const Matters: React.FC = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t('case_number') || 'Case Number'}</label>
                 <input type="text" className="w-full border border-gray-300 rounded-lg p-2.5 text-sm bg-white text-slate-900 focus:ring-2 focus:ring-primary-500 outline-none" placeholder="e.g. 2024/123" value={editData ? editData.caseNumber || '' : formData.caseNumber} onChange={e => editData ? setEditData({ ...editData, caseNumber: e.target.value }) : setFormData({ ...formData, caseNumber: e.target.value })} />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Entity & Office</label>
+                <EntityOfficeFilter
+                  entityId={formEntityId || ''}
+                  officeId={formOfficeId || ''}
+                  onEntityChange={(value) => {
+                    if (editData) {
+                      setEditData({ ...editData, entityId: value, officeId: '' });
+                    } else {
+                      setFormData({ ...formData, entityId: value, officeId: '' });
+                    }
+                  }}
+                  onOfficeChange={(value) => {
+                    if (editData) {
+                      setEditData({ ...editData, officeId: value });
+                    } else {
+                      setFormData({ ...formData, officeId: value });
+                    }
+                  }}
+                />
               </div>
               {!editData && (
                 <div>

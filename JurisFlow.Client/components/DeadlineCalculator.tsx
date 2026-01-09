@@ -49,6 +49,7 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
     const [showCreateForm, setShowCreateForm] = useState(false);
     const [deadlineTitle, setDeadlineTitle] = useState('');
     const [creating, setCreating] = useState(false);
+    const [reminderDays, setReminderDays] = useState(3);
 
     useEffect(() => {
         loadInitialData();
@@ -119,7 +120,8 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                 title: deadlineTitle,
                 dueDate: calculatedDeadline.dueDate,
                 description: calculatedDeadline.description,
-                deadlineType: 'Filing'
+                deadlineType: 'Filing',
+                reminderDays
             });
             onDeadlineCreate?.(deadline);
             setShowCreateForm(false);
@@ -238,7 +240,7 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                                 className="w-full px-4 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500"
                             >
                                 <option value="Personal">Personal Service</option>
-                                <option value="Mail">Mail Service (+5 days)</option>
+                                <option value="Mail">Mail Service (rule-based)</option>
                                 <option value="Electronic">Electronic Service (+2 days)</option>
                             </select>
                         </div>
@@ -282,6 +284,11 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                                         Citation: {calculatedDeadline.ruleCitation}
                                     </p>
                                 )}
+                                {calculatedDeadline.serviceDaysAdded > 0 && (
+                                    <p className="text-xs text-slate-500 mt-1">
+                                        Includes +{calculatedDeadline.serviceDaysAdded} service days.
+                                    </p>
+                                )}
                                 <div className="mt-3 flex items-center gap-3">
                                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${getDaysUntil(calculatedDeadline.dueDate) <= 7
                                             ? 'bg-red-100 text-red-700'
@@ -315,6 +322,19 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                                     placeholder="Deadline title"
                                     className="w-full px-3 py-2 border border-slate-200 rounded-lg mb-3"
                                 />
+                                <div className="mb-3">
+                                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                                        Reminder (days before due date)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={60}
+                                        value={reminderDays}
+                                        onChange={(e) => setReminderDays(Math.max(0, Number(e.target.value)))}
+                                        className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                                    />
+                                </div>
                                 <div className="flex gap-2">
                                     <button
                                         onClick={createDeadline}
@@ -347,7 +367,7 @@ export default function DeadlineCalculator({ matterId, onDeadlineCreate }: Deadl
                             {rule.serviceDaysAdd > 0 && (
                                 <p className="text-amber-600">
                                     <AlertTriangle className="w-4 h-4 inline mr-1" />
-                                    +{rule.serviceDaysAdd} days may be added for non-personal service
+                                    Mail service adds +{rule.serviceDaysAdd} days. Electronic service adds +2 days.
                                 </p>
                             )}
                         </div>

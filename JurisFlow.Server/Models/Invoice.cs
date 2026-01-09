@@ -18,6 +18,10 @@ namespace JurisFlow.Server.Models
 
         public string? MatterId { get; set; }
 
+        public string? EntityId { get; set; }
+
+        public string? OfficeId { get; set; }
+
         public InvoiceStatus Status { get; set; } = InvoiceStatus.Draft;
 
         public DateTime IssueDate { get; set; } = DateTime.UtcNow;

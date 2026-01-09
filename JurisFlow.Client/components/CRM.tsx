@@ -11,12 +11,16 @@ const CRM: React.FC = () => {
    const { t, formatCurrency } = useTranslation();
    const { clients, leads, addLead, updateLead, deleteLead, updateClient, addClient } = useData();
    const [highlightClientId, setHighlightClientId] = useState<string | null>(null);
+   const [highlightLeadId, setHighlightLeadId] = useState<string | null>(null);
    const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
    const [clientSearch, setClientSearch] = useState('');
    const [editingClient, setEditingClient] = useState<Client | null>(null);
    const [clientForm, setClientForm] = useState<Partial<Client>>({});
    const [isSavingClient, setIsSavingClient] = useState(false);
    const [portalPassword, setPortalPassword] = useState('');
+   const [statusHistory, setStatusHistory] = useState<any[]>([]);
+   const [statusHistoryLoading, setStatusHistoryLoading] = useState(false);
+   const [statusChangeNote, setStatusChangeNote] = useState('');
    const [showCreateClientModal, setShowCreateClientModal] = useState(false);
    const [isCreatingClient, setIsCreatingClient] = useState(false);
    const [createClientError, setCreateClientError] = useState('');
@@ -63,6 +67,20 @@ const CRM: React.FC = () => {
       setHighlightClientId(targetId);
       localStorage.removeItem('cmd_target_client');
    }, []);
+
+   useEffect(() => {
+      const targetId = localStorage.getItem('cmd_target_lead');
+      if (!targetId) return;
+      setView('pipeline');
+      setHighlightLeadId(targetId);
+      localStorage.removeItem('cmd_target_lead');
+   }, []);
+
+   useEffect(() => {
+      if (!highlightLeadId) return;
+      const timer = setTimeout(() => setHighlightLeadId(null), 4000);
+      return () => clearTimeout(timer);
+   }, [highlightLeadId]);
 
    const moveLead = (lead: Lead, direction: 'prev' | 'next') => {
       const idx = pipelineStages.findIndex(s => s.key === lead.status);
@@ -207,6 +225,19 @@ const CRM: React.FC = () => {
       }
    };
 
+   const loadStatusHistory = async (clientId: string) => {
+      setStatusHistoryLoading(true);
+      try {
+         const history = await api.getClientStatusHistory(clientId);
+         setStatusHistory(history || []);
+      } catch (error) {
+         console.error('Failed to load client status history', error);
+         setStatusHistory([]);
+      } finally {
+         setStatusHistoryLoading(false);
+      }
+   };
+
    const openEditClient = (client: Client) => {
       setEditingClient(client);
       setClientForm({
@@ -219,25 +250,39 @@ const CRM: React.FC = () => {
          portalEnabled: client.portalEnabled ?? false
       });
       setPortalPassword('');
+      setStatusChangeNote('');
    };
+
+   useEffect(() => {
+      if (!editingClient) return;
+      loadStatusHistory(editingClient.id);
+   }, [editingClient]);
 
    const handleSaveClient = async () => {
       if (!editingClient) return;
       const portalEnabled = !!clientForm.portalEnabled;
       const requiresPortalPassword = portalEnabled && !editingClient.portalEnabled;
+      const nextStatus = clientForm.status || editingClient.status;
+      const statusChanged = nextStatus !== editingClient.status;
       if (requiresPortalPassword && !portalPassword.trim()) {
          toast.error('Set a password to enable portal access.');
          return;
       }
       setIsSavingClient(true);
       try {
-         await updateClient(editingClient.id, clientForm);
+         const payload: any = { ...clientForm };
+         if (statusChanged && statusChangeNote.trim()) {
+            payload.statusChangeNote = statusChangeNote.trim();
+         }
+         await updateClient(editingClient.id, payload);
          if (portalEnabled && portalPassword.trim()) {
             await api.setClientPassword(editingClient.id, portalPassword.trim());
          }
+         await loadStatusHistory(editingClient.id);
          toast.success('Client updated successfully.');
          setEditingClient(null);
          setPortalPassword('');
+         setStatusChangeNote('');
       } catch {
          // errors are already logged in context
          toast.error('Failed to update client.');
@@ -294,7 +339,10 @@ const CRM: React.FC = () => {
                            </div>
                            <div className="flex-1 bg-gray-100/50 rounded-xl p-2 space-y-2">
                               {stageLeads.map(lead => (
-                                 <div key={lead.id} className="bg-white p-3 rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-shadow">
+                                 <div
+                                    key={lead.id}
+                                    className={`bg-white p-3 rounded-lg shadow-sm border border-gray-200 hover:shadow-md transition-shadow ${highlightLeadId === lead.id ? 'ring-2 ring-indigo-400' : ''}`}
+                                 >
                                     <div className="flex justify-between items-start mb-2">
                                        <span className="text-[10px] font-medium text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded truncate max-w-[100px]">{lead.practiceArea}</span>
                                        <span className="text-[10px] text-gray-500 font-medium">{formatCurrency(lead.estimatedValue)}</span>
@@ -743,7 +791,7 @@ const CRM: React.FC = () => {
                         <p className="text-xs text-gray-500 uppercase font-semibold">{t('crm_edit_client')}</p>
                         <h3 className="font-bold text-lg text-slate-800">{editingClient.name}</h3>
                      </div>
-                     <button onClick={() => setEditingClient(null)} className="text-gray-400 hover:text-gray-600">
+                     <button onClick={() => { setEditingClient(null); setStatusChangeNote(''); }} className="text-gray-400 hover:text-gray-600">
                         <X className="w-5 h-5" />
                      </button>
                   </div>
@@ -803,6 +851,55 @@ const CRM: React.FC = () => {
                               <option value="Inactive">Inactive</option>
                            </select>
                         </div>
+                        {editingClient && (clientForm.status || editingClient.status) !== editingClient.status && (
+                           <div className="md:col-span-2">
+                              <label className="text-xs font-semibold text-gray-500">Status Change Note (optional)</label>
+                              <textarea
+                                 className="mt-1 w-full border border-gray-300 p-2.5 rounded-lg bg-white text-slate-900"
+                                 value={statusChangeNote}
+                                 onChange={e => setStatusChangeNote(e.target.value)}
+                                 placeholder={`Why is the status changing to ${clientForm.status || editingClient.status}?`}
+                                 rows={2}
+                              />
+                           </div>
+                        )}
+                     </div>
+
+                     <div className="mt-6 border-t border-gray-100 pt-4">
+                        <div className="flex items-center justify-between">
+                           <p className="text-xs font-semibold text-gray-500 uppercase">Status Timeline</p>
+                           <button
+                              onClick={() => editingClient && loadStatusHistory(editingClient.id)}
+                              className="text-xs text-gray-500 hover:text-slate-700"
+                              type="button"
+                           >
+                              Refresh
+                           </button>
+                        </div>
+                        {statusHistoryLoading ? (
+                           <p className="text-xs text-gray-400 mt-3">Loading status history...</p>
+                        ) : statusHistory.length === 0 ? (
+                           <p className="text-xs text-gray-400 mt-3">No status updates recorded yet.</p>
+                        ) : (
+                           <div className="mt-3 space-y-3">
+                              {statusHistory.map(item => (
+                                 <div key={item.id} className="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-lg p-3">
+                                    <div className="w-2 h-2 rounded-full bg-slate-400 mt-1.5"></div>
+                                    <div className="flex-1">
+                                       <p className="text-sm font-semibold text-slate-800">
+                                          {item.previousStatus} {'->'} {item.newStatus}
+                                       </p>
+                                       <p className="text-xs text-gray-500 mt-1">
+                                          {item.changedByName || 'System'} - {new Date(item.createdAt).toLocaleString('en-US')}
+                                       </p>
+                                       {item.notes && (
+                                          <p className="text-xs text-gray-500 mt-1">{item.notes}</p>
+                                       )}
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        )}
                      </div>
 
                      <div className="mt-6 border-t border-gray-100 pt-4">
@@ -855,7 +952,7 @@ const CRM: React.FC = () => {
                      <div className="flex justify-end gap-2 mt-6">
                         <button
                            type="button"
-                           onClick={() => setEditingClient(null)}
+                           onClick={() => { setEditingClient(null); setStatusChangeNote(''); }}
                            className="px-3 py-2 text-sm font-bold text-gray-600 hover:bg-gray-100 rounded-lg"
                            disabled={isSavingClient}
                         >

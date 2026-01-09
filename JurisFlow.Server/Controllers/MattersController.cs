@@ -14,16 +14,18 @@ namespace JurisFlow.Server.Controllers
     {
         private readonly JurisFlowDbContext _context;
         private readonly AuditLogger _auditLogger;
+        private readonly FirmStructureService _firmStructure;
 
-        public MattersController(JurisFlowDbContext context, AuditLogger auditLogger)
+        public MattersController(JurisFlowDbContext context, AuditLogger auditLogger, FirmStructureService firmStructure)
         {
             _context = context;
             _auditLogger = auditLogger;
+            _firmStructure = firmStructure;
         }
 
         // GET: api/Matters
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<Matter>>> GetMatters([FromQuery] string? status)
+        public async Task<ActionResult<IEnumerable<Matter>>> GetMatters([FromQuery] string? status, [FromQuery] string? entityId, [FromQuery] string? officeId)
         {
             var query = _context.Matters.Include(m => m.Client).AsQueryable();
 
@@ -40,6 +42,16 @@ namespace JurisFlow.Server.Controllers
                 {
                      query = query.Where(m => m.Status == status || (status == "Open" && m.Status != "Archived" && m.Status != "Closed"));
                 }
+            }
+
+            if (!string.IsNullOrWhiteSpace(entityId))
+            {
+                query = query.Where(m => m.EntityId == entityId);
+            }
+
+            if (!string.IsNullOrWhiteSpace(officeId))
+            {
+                query = query.Where(m => m.OfficeId == officeId);
             }
 
             return await query.OrderByDescending(m => m.OpenDate).ToListAsync();
@@ -67,6 +79,10 @@ namespace JurisFlow.Server.Controllers
 
             matter.Id = Guid.NewGuid().ToString();
             matter.OpenDate = DateTime.UtcNow;
+
+            var resolved = await _firmStructure.ResolveEntityOfficeAsync(matter.EntityId, matter.OfficeId);
+            matter.EntityId = resolved.entityId;
+            matter.OfficeId = resolved.officeId;
             
             _context.Matters.Add(matter);
             await _context.SaveChangesAsync();

@@ -9,6 +9,8 @@ import { googleDocsService } from '../services/googleDocsService';
 import { toast } from './Toast';
 import { useConfirm } from './ConfirmDialog';
 import { getGoogleClientId } from '../services/googleConfig';
+import SignatureRequestModal from './SignatureRequestModal';
+import SignatureStatus from './SignatureStatus';
 
 // API base URL - production'da relative path kullan
 const API_BASE_URL = ''; // Use proxy for both api and uploads
@@ -18,6 +20,7 @@ const Documents: React.FC = () => {
   const { matters, documents, addDocument, updateDocument, deleteDocument, bulkAssignDocuments } = useData();
   const { confirm } = useConfirm();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const versionFileInputRef = useRef<HTMLInputElement>(null);
   const [showFilter, setShowFilter] = useState(false);
   const [filterType, setFilterType] = useState('all');
   const [selectedMatter, setSelectedMatter] = useState<string | null>(null);
@@ -39,9 +42,20 @@ const Documents: React.FC = () => {
   const [bulkMatterId, setBulkMatterId] = useState<string>('');
   const [editCategory, setEditCategory] = useState<string>('');
   const [editStatus, setEditStatus] = useState<string>('');
+  const [editLegalHoldReason, setEditLegalHoldReason] = useState('');
   const [searchResults, setSearchResults] = useState<DocumentFile[]>([]);
   const [isSearchingContent, setIsSearchingContent] = useState(false);
   const [searchInContent, setSearchInContent] = useState(false);
+  const [showSignatureModal, setShowSignatureModal] = useState(false);
+  const [signatureDocumentId, setSignatureDocumentId] = useState<string | null>(null);
+  const [signatureMatterId, setSignatureMatterId] = useState<string | undefined>(undefined);
+  const [showVersionModal, setShowVersionModal] = useState(false);
+  const [versionDoc, setVersionDoc] = useState<DocumentFile | null>(null);
+  const [versionList, setVersionList] = useState<any[]>([]);
+  const [versionLoading, setVersionLoading] = useState(false);
+  const [diffLeftId, setDiffLeftId] = useState('');
+  const [diffRightId, setDiffRightId] = useState('');
+  const [diffResult, setDiffResult] = useState('');
 
   useEffect(() => {
     setIsGoogleDocsConnected(!!googleDocsAccessToken);
@@ -120,7 +134,14 @@ const Documents: React.FC = () => {
           size: `${(uploadedDoc.fileSize / 1024 / 1024).toFixed(2)} MB`,
           updatedAt: uploadedDoc.createdAt,
           matterId: uploadedDoc.matterId || undefined,
-          filePath: uploadedDoc.filePath
+          filePath: uploadedDoc.filePath,
+          category: uploadedDoc.category || undefined,
+          status: uploadedDoc.status || undefined,
+          version: uploadedDoc.version || undefined,
+          legalHoldReason: uploadedDoc.legalHoldReason || undefined,
+          legalHoldPlacedAt: uploadedDoc.legalHoldPlacedAt || undefined,
+          legalHoldReleasedAt: uploadedDoc.legalHoldReleasedAt || undefined,
+          legalHoldPlacedBy: uploadedDoc.legalHoldPlacedBy || undefined
         };
 
         // Add to context state - this will persist
@@ -234,6 +255,121 @@ const Documents: React.FC = () => {
     }
   };
 
+  const handleRequestSignature = (doc: DocumentFile) => {
+    setSignatureDocumentId(doc.id);
+    setSignatureMatterId(doc.matterId || undefined);
+    setShowSignatureModal(true);
+  };
+
+  const loadVersions = async (documentId: string) => {
+    setVersionLoading(true);
+    try {
+      const versions = await api.getDocumentVersions(documentId);
+      setVersionList(Array.isArray(versions) ? versions : []);
+    } catch (error) {
+      console.error('Failed to load document versions', error);
+      toast.error('Unable to load version history.');
+      setVersionList([]);
+    } finally {
+      setVersionLoading(false);
+    }
+  };
+
+  const openVersionHistory = async (doc: DocumentFile) => {
+    if (!doc.filePath) {
+      toast.warning('Version history is available for uploaded documents only.');
+      return;
+    }
+    setVersionDoc(doc);
+    setDiffLeftId('');
+    setDiffRightId('');
+    setDiffResult('');
+    setShowVersionModal(true);
+    await loadVersions(doc.id);
+  };
+
+  const handleDownloadVersion = async (versionId: string) => {
+    try {
+      const res = await api.downloadDocumentVersion(versionId);
+      if (!res) return;
+      const url = window.URL.createObjectURL(res.blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = res.filename || 'document-version';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error: any) {
+      console.error('Download version error:', error);
+      toast.error('Failed to download version.');
+    }
+  };
+
+  const handleRestoreVersion = async (versionId: string) => {
+    const ok = await confirm({
+      title: 'Restore version',
+      message: 'Restore this version as the current document?',
+      confirmText: 'Restore',
+      cancelText: 'Cancel'
+    });
+    if (!ok || !versionDoc) return;
+    try {
+      const updated = await api.restoreDocumentVersion(versionId);
+      if (updated) {
+        updateDocument(versionDoc.id, {
+          name: updated.name,
+          filePath: updated.filePath,
+          fileSize: updated.fileSize,
+          size: updated.fileSize ? `${(updated.fileSize / 1024 / 1024).toFixed(2)} MB` : undefined,
+          version: updated.version,
+          updatedAt: updated.updatedAt || updated.createdAt
+        });
+      }
+      toast.success('Version restored.');
+      await loadVersions(versionDoc.id);
+    } catch (error: any) {
+      console.error('Restore version error:', error);
+      toast.error('Failed to restore version.');
+    }
+  };
+
+  const handleUploadVersion = async (file: File) => {
+    if (!versionDoc) return;
+    try {
+      const updated = await api.uploadDocumentVersion(versionDoc.id, file);
+      if (updated) {
+        updateDocument(versionDoc.id, {
+          name: updated.name,
+          filePath: updated.filePath,
+          fileSize: updated.fileSize,
+          size: updated.fileSize ? `${(updated.fileSize / 1024 / 1024).toFixed(2)} MB` : undefined,
+          version: updated.version,
+          updatedAt: updated.updatedAt || updated.createdAt
+        });
+      }
+      toast.success('New version uploaded.');
+      await loadVersions(versionDoc.id);
+    } catch (error: any) {
+      console.error('Upload version error:', error);
+      toast.error('Failed to upload new version.');
+    }
+  };
+
+  const handleDiffVersions = async () => {
+    if (!diffLeftId || !diffRightId) {
+      toast.error('Select two versions to compare.');
+      return;
+    }
+    try {
+      const result = await api.diffDocumentVersions(diffLeftId, diffRightId);
+      setDiffResult(result?.diff || '');
+    } catch (error: any) {
+      console.error('Diff error', error);
+      toast.error('Unable to compare versions.');
+    }
+  };
+
   // Content-aware search against backend
   useEffect(() => {
     const q = searchQuery.trim();
@@ -265,7 +401,12 @@ const Documents: React.FC = () => {
             matterId: d.matterId || undefined,
             filePath: d.filePath,
             category: d.category || undefined,
-            status: d.status || undefined
+            status: d.status || undefined,
+            version: d.version || undefined,
+            legalHoldReason: d.legalHoldReason || undefined,
+            legalHoldPlacedAt: d.legalHoldPlacedAt || undefined,
+            legalHoldReleasedAt: d.legalHoldReleasedAt || undefined,
+            legalHoldPlacedBy: d.legalHoldPlacedBy || undefined
           }));
           setSearchResults(mapped);
         } else {
@@ -428,7 +569,7 @@ const Documents: React.FC = () => {
                 checked={searchInContent}
                 onChange={e => setSearchInContent(e.target.checked)}
               />
-              Search document text
+              Search document text (indexed)
               {searchInContent && isSearchingContent && (
                 <span className="text-gray-400">Searching...</span>
               )}
@@ -592,11 +733,25 @@ const Documents: React.FC = () => {
                         Download
                       </button>
                       <button
+                        onClick={() => handleRequestSignature(doc)}
+                        className="px-2 py-1 text-xs text-indigo-600 hover:bg-indigo-50 rounded"
+                      >
+                        Request Signature
+                      </button>
+                      <button
+                        onClick={() => openVersionHistory(doc)}
+                        className="px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 rounded"
+                      >
+                        Versions
+                      </button>
+                      <button
                         onClick={() => {
                           setEditingDoc(doc);
                           setEditMatterId(doc.matterId || '');
                           setEditTags((doc.tags || []).join(', '));
                           setEditCategory(doc.category || '');
+                          setEditStatus(doc.status || '');
+                          setEditLegalHoldReason(doc.legalHoldReason || '');
                         }}
                         className="px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 rounded"
                         title="Assign to matter"
@@ -605,7 +760,8 @@ const Documents: React.FC = () => {
                       </button>
                       <button
                         onClick={() => handleDelete(doc)}
-                        className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded flex items-center gap-1"
+                        disabled={doc.status === DocumentStatus.OnLegalHold}
+                        className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded flex items-center gap-1 disabled:opacity-50 disabled:hover:bg-transparent"
                         title="Delete"
                       >
                         <Trash2 className="w-3 h-3" /> Delete
@@ -628,11 +784,21 @@ const Documents: React.FC = () => {
                       <span>{doc.size || 'Unknown'}</span>
                       <span>{formatDate(doc.updatedAt)}</span>
                     </div>
-                    {doc.category && (
+                    {doc.version && (
+                      <div className="text-[10px] text-gray-400 mt-1">Version v{doc.version}</div>
+                    )}
+                    {(doc.category || doc.status) && (
                       <div className="mt-1 flex items-center gap-1">
-                        <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded border border-indigo-100 font-medium">{doc.category}</span>
+                        {doc.category && (
+                          <span className="inline-block px-2 py-0.5 bg-indigo-50 text-indigo-600 text-[10px] rounded border border-indigo-100 font-medium">{doc.category}</span>
+                        )}
                         {doc.status === DocumentStatus.OnLegalHold && (
-                          <span className="inline-block px-2 py-0.5 bg-red-50 text-red-600 text-[10px] rounded border border-red-100 font-bold">🔒 Legal Hold</span>
+                          <span
+                            title={doc.legalHoldReason || 'Document is on legal hold.'}
+                            className="inline-block px-2 py-0.5 bg-red-50 text-red-600 text-[10px] rounded border border-red-100 font-bold"
+                          >
+                            Legal Hold
+                          </span>
                         )}
                         {doc.status && doc.status !== DocumentStatus.OnLegalHold && (
                           <span className={`inline-block px-2 py-0.5 text-[10px] rounded border font-medium ${doc.status === DocumentStatus.Final ? 'bg-green-50 text-green-600 border-green-100' :
@@ -699,14 +865,152 @@ const Documents: React.FC = () => {
               )}
             </div>
 
+            <div className="border-t border-gray-200 bg-white px-6 py-4">
+              <SignatureStatus documentId={viewingDoc.id} showActions />
+            </div>
+
             {/* Footer Actions */}
             <div className="px-6 py-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3">
+              <button
+                onClick={() => handleRequestSignature(viewingDoc)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700"
+              >
+                Request Signature
+              </button>
               <button
                 onClick={() => handleDownload(viewingDoc)}
                 className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900"
               >
                 Download
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSignatureModal && signatureDocumentId && (
+        <SignatureRequestModal
+          isOpen={showSignatureModal}
+          documentId={signatureDocumentId}
+          matterId={signatureMatterId}
+          onClose={() => {
+            setShowSignatureModal(false);
+            setSignatureDocumentId(null);
+            setSignatureMatterId(undefined);
+          }}
+          onSuccess={() => {
+            toast.success('Signature request sent.');
+          }}
+        />
+      )}
+
+      {showVersionModal && versionDoc && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl overflow-hidden">
+            <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between bg-gray-50">
+              <div>
+                <h3 className="font-bold text-lg text-slate-800">Version History</h3>
+                <p className="text-xs text-gray-500 mt-1">{versionDoc.name}</p>
+              </div>
+              <button
+                onClick={() => { setShowVersionModal(false); setVersionDoc(null); }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Uploaded Versions</p>
+                  <p className="text-xs text-gray-500">Restore or download prior versions.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={versionFileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        handleUploadVersion(e.target.files[0]);
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  <button
+                    onClick={() => versionFileInputRef.current?.click()}
+                    className="px-3 py-2 bg-slate-800 text-white rounded-lg text-xs font-bold hover:bg-slate-900"
+                  >
+                    Upload New Version
+                  </button>
+                </div>
+              </div>
+
+              {versionLoading ? (
+                <p className="text-sm text-gray-400">Loading version history...</p>
+              ) : versionList.length === 0 ? (
+                <p className="text-sm text-gray-400">No versions found.</p>
+              ) : (
+                <div className="border border-gray-200 rounded-lg overflow-hidden">
+                  {versionList.map((version: any) => (
+                    <div key={version.id} className="flex items-center justify-between px-4 py-3 border-b border-gray-100 last:border-0">
+                      <div>
+                        <p className="text-sm font-semibold text-slate-800">{version.fileName}</p>
+                        <p className="text-xs text-gray-500">
+                          {formatDate(version.createdAt)} - {typeof version.fileSize === 'number' ? `${(version.fileSize / 1024 / 1024).toFixed(2)} MB` : 'Unknown size'}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDownloadVersion(version.id)}
+                          className="px-2 py-1 text-xs text-slate-600 border border-gray-200 rounded hover:bg-gray-50"
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={() => handleRestoreVersion(version.id)}
+                          className="px-2 py-1 text-xs text-emerald-600 border border-emerald-200 rounded hover:bg-emerald-50"
+                        >
+                          Restore
+                        </button>
+                        <button
+                          onClick={() => setDiffLeftId(version.id)}
+                          className={`px-2 py-1 text-xs border rounded ${diffLeftId === version.id ? 'bg-slate-800 text-white border-slate-800' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                        >
+                          Left
+                        </button>
+                        <button
+                          onClick={() => setDiffRightId(version.id)}
+                          className={`px-2 py-1 text-xs border rounded ${diffRightId === version.id ? 'bg-slate-800 text-white border-slate-800' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}
+                        >
+                          Right
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="border-t border-gray-100 pt-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">Compare Versions</p>
+                    <p className="text-xs text-gray-500">Select two versions to generate a diff.</p>
+                  </div>
+                  <button
+                    onClick={handleDiffVersions}
+                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700"
+                  >
+                    Compare
+                  </button>
+                </div>
+                {diffResult && (
+                  <pre className="mt-3 max-h-64 overflow-y-auto text-xs bg-gray-50 border border-gray-200 rounded-lg p-3 whitespace-pre-wrap text-slate-700">
+                    {diffResult}
+                  </pre>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -767,6 +1071,19 @@ const Documents: React.FC = () => {
                   <option key={s} value={s}>{s}</option>
                 ))}
               </select>
+
+              {editStatus === DocumentStatus.OnLegalHold && (
+                <div className="mt-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Legal Hold Reason</label>
+                  <textarea
+                    value={editLegalHoldReason}
+                    onChange={(e) => setEditLegalHoldReason(e.target.value)}
+                    placeholder="Describe the legal hold scope or reason"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                    rows={3}
+                  />
+                </div>
+              )}
             </div>
 
             <div className="px-6 py-4 border-t border-gray-200 flex justify-end gap-3">
@@ -776,6 +1093,8 @@ const Documents: React.FC = () => {
                   setEditMatterId('');
                   setEditTags('');
                   setEditCategory('');
+                  setEditStatus('');
+                  setEditLegalHoldReason('');
                 }}
                 className="px-4 py-2 text-gray-600 hover:text-gray-800 text-sm font-medium"
               >
@@ -791,8 +1110,9 @@ const Documents: React.FC = () => {
                     await updateDocument(editingDoc.id, {
                       matterId: editMatterId || undefined,
                       tags,
-                      category: editCategory || undefined,
-                      status: editStatus || undefined
+                      category: editCategory,
+                      status: editStatus,
+                      legalHoldReason: editStatus === DocumentStatus.OnLegalHold ? editLegalHoldReason.trim() : undefined
                     });
                     toast.success('Document updated');
                     setEditingDoc(null);
@@ -800,6 +1120,7 @@ const Documents: React.FC = () => {
                     setEditTags('');
                     setEditCategory('');
                     setEditStatus('');
+                    setEditLegalHoldReason('');
                   }
                 }}
                 className="px-4 py-2 bg-primary-600 text-white rounded-lg text-sm font-medium hover:bg-primary-700"

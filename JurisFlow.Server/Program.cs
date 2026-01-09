@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
 using JurisFlow.Server.Services;
+using JurisFlow.Server.Middleware;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -49,6 +50,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 builder.Services.AddScoped<AuditLogger>();
+builder.Services.AddScoped<FirmStructureService>();
+builder.Services.AddScoped<PaymentPlanService>();
+builder.Services.AddScoped<DocumentIndexService>();
+builder.Services.AddScoped<RetentionService>();
+builder.Services.AddHostedService<RetentionHostedService>();
+builder.Services.AddScoped<DeadlineReminderService>();
+builder.Services.AddHostedService<DeadlineReminderHostedService>();
 
 var app = builder.Build();
 
@@ -76,6 +84,7 @@ app.UseStaticFiles(new StaticFileOptions
 });
 
 app.UseAuthentication();
+app.UseMiddleware<SessionValidationMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
@@ -139,6 +148,36 @@ using (var scope = app.Services.CreateScope())
         }
 
         context.SaveChanges();
+
+        if (!context.BillingSettings.Any())
+        {
+            context.BillingSettings.Add(new BillingSettings());
+        }
+
+        if (!context.FirmSettings.Any())
+        {
+            context.FirmSettings.Add(new FirmSettings
+            {
+                FirmName = "JurisFlow Legal"
+            });
+        }
+
+        context.SaveChanges();
+
+        if (!context.RetentionPolicies.Any())
+        {
+            context.RetentionPolicies.AddRange(new[]
+            {
+                new RetentionPolicy { EntityName = "AuditLog", RetentionDays = 365 },
+                new RetentionPolicy { EntityName = "Notification", RetentionDays = 180 },
+                new RetentionPolicy { EntityName = "ClientMessage", RetentionDays = 365 },
+                new RetentionPolicy { EntityName = "StaffMessage", RetentionDays = 365 },
+                new RetentionPolicy { EntityName = "ResearchSession", RetentionDays = 90 },
+                new RetentionPolicy { EntityName = "SignatureRequest", RetentionDays = 365 },
+                new RetentionPolicy { EntityName = "AuthSession", RetentionDays = 30 }
+            });
+            context.SaveChanges();
+        }
     }
     catch (Exception ex)
     {

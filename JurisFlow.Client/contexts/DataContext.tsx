@@ -70,7 +70,7 @@ interface DataContextType {
 
   // Timer Actions
   activeTimer: ActiveTimer | null;
-  startTimer: (matterId: string | undefined, description: string, rate?: number) => void;
+  startTimer: (matterId: string | undefined, description: string, rate?: number, activityCode?: string, isBillable?: boolean) => void;
   stopTimer: () => Promise<void>;
   updateTimer: (elapsed: number) => void;
   pauseTimer: () => void;
@@ -81,9 +81,14 @@ interface DataContextType {
   deleteMatter: (id: string) => Promise<void>;
   addTimeEntry: (item: any) => Promise<void>;
   addExpense: (item: any) => void;
+  approveTimeEntry: (id: string) => Promise<void>;
+  rejectTimeEntry: (id: string, reason?: string) => Promise<void>;
+  approveExpense: (id: string) => Promise<void>;
+  rejectExpense: (id: string, reason?: string) => Promise<void>;
   addMessage: (item: Message) => void;
   markMessageRead: (id: string) => void;
   addEvent: (item: any) => Promise<void>;
+  updateEvent: (id: string, data: Partial<CalendarEvent>) => Promise<void>;
   deleteEvent: (id: string) => Promise<void>;
   addDocument: (item: DocumentFile) => void;
   updateDocument: (id: string, data: Partial<DocumentFile>) => void;
@@ -92,7 +97,7 @@ interface DataContextType {
   updateInvoice: (id: string, data: any) => void;
   deleteInvoice: (id: string) => void;
   addClient: (item: any) => Promise<Client>;
-  updateClient: (id: string, data: Partial<Client>) => Promise<void>;
+  updateClient: (id: string, data: Partial<Client> & { statusChangeNote?: string }) => Promise<void>;
   addLead: (item: any) => Promise<void>;
   updateLead: (id: string, data: Partial<Lead>) => Promise<void>;
   deleteLead: (id: string) => Promise<void>;
@@ -151,14 +156,16 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [activeTimer]);
 
-  const startTimer = (matterId: string | undefined, description: string, rate?: number) => {
+  const startTimer = (matterId: string | undefined, description: string, rate?: number, activityCode?: string, isBillable?: boolean) => {
     const newTimer: ActiveTimer = {
       startTime: Date.now(),
       matterId,
       description,
       isRunning: true,
       elapsed: 0,
-      rate
+      rate,
+      activityCode,
+      isBillable
     };
     setActiveTimer(newTimer);
   };
@@ -209,7 +216,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       date: new Date().toISOString(),
       rate: activeTimer.rate || 0, // Use stored rate or default to 0
       billed: false,
-      type: 'time'
+      type: 'time',
+      activityCode: activeTimer.activityCode,
+      isBillable: activeTimer.isBillable ?? true
     });
 
     setActiveTimer(null);
@@ -253,7 +262,13 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       filePath: d.filePath || undefined,
       description: d.description || undefined,
       tags: parseDocTags(d.tags),
+      category: d.category || undefined,
+      status: d.status || undefined,
       version: d.version || undefined,
+      legalHoldReason: d.legalHoldReason || undefined,
+      legalHoldPlacedAt: d.legalHoldPlacedAt || undefined,
+      legalHoldReleasedAt: d.legalHoldReleasedAt || undefined,
+      legalHoldPlacedBy: d.legalHoldPlacedBy || undefined,
     };
   };
 
@@ -583,10 +598,18 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const addTimeEntry = async (entryData: any) => {
-    const tempEntry = { ...entryData, id: `te-${Date.now()}` };
+    const payload = {
+      ...entryData,
+      isBillable: entryData.isBillable ?? true
+    };
+    const tempEntry = {
+      ...payload,
+      id: `te-${Date.now()}`,
+      approvalStatus: payload.approvalStatus || 'Pending'
+    };
     setTimeEntries(prev => [tempEntry, ...prev]);
     try {
-      const newEntry = await api.createTimeEntry(entryData);
+      const newEntry = await api.createTimeEntry(payload);
       setTimeEntries(prev => [newEntry, ...prev.filter(t => t.id !== tempEntry.id)]);
     } catch (e) { console.error("API Error", e); }
   };
@@ -605,10 +628,11 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const updateClient = async (id: string, data: Partial<Client>) => {
+  const updateClient = async (id: string, data: Partial<Client> & { statusChangeNote?: string }) => {
     const prev = clients;
+    const { statusChangeNote, ...clientData } = data;
     // Optimistic update
-    setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...data } : c));
+    setClients(prevClients => prevClients.map(c => c.id === id ? { ...c, ...clientData } : c));
     try {
       const updated = await api.admin.updateClient(id, data);
       if (updated) {
@@ -658,6 +682,20 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
     } catch (e) { console.error("API Error", e); }
   };
 
+  const updateEvent = async (id: string, data: Partial<CalendarEvent>) => {
+    const prev = events;
+    setEvents(prevEvents => prevEvents.map(e => e.id === id ? { ...e, ...data } : e));
+    try {
+      const updated = await api.updateEvent(id, data);
+      if (updated) {
+        setEvents(prevEvents => prevEvents.map(e => e.id === id ? updated : e));
+      }
+    } catch (e) {
+      console.error("API Error (updateEvent)", e);
+      setEvents(prev);
+    }
+  };
+
   const deleteEvent = async (id: string) => {
     const prev = events;
     setEvents(prev => prev.filter(e => e.id !== id));
@@ -679,17 +717,44 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateInvoice = (id: string, data: any) => {
-    setInvoices(prev => prev.map(inv => inv.id === id ? { ...inv, ...data } : inv));
+    const prev = invoices;
+    setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...data } : inv));
+    api.updateInvoice(id, data)
+      .then(updated => {
+        if (updated) {
+          setInvoices(items => items.map(inv => inv.id === id ? { ...inv, ...updated } : inv));
+        }
+      })
+      .catch(e => {
+        console.error("API Error (updateInvoice)", e);
+        setInvoices(prev);
+      });
   };
 
   const deleteInvoice = (id: string) => {
-    setInvoices(prev => prev.filter(inv => inv.id !== id));
+    const prev = invoices;
+    setInvoices(items => items.filter(inv => inv.id !== id));
+    api.deleteInvoice(id).catch(e => {
+      console.error("API Error (deleteInvoice)", e);
+      setInvoices(prev);
+    });
   };
 
   const markAsBilled = async (matterId: string) => {
     // Optimistic
-    setTimeEntries(prev => prev.map(e => e.matterId === matterId ? { ...e, billed: true } : e));
-    setExpenses(prev => prev.map(e => e.matterId === matterId ? { ...e, billed: true } : e));
+    setTimeEntries(prev => prev.map(e => {
+      if (e.matterId !== matterId) return e;
+      if (e.isBillable === false) return e;
+      const status = (e.approvalStatus || '').toLowerCase();
+      if (status && status !== 'approved') return e;
+      return { ...e, billed: true };
+    }));
+    setExpenses(prev => prev.map(e => {
+      if (e.matterId !== matterId) return e;
+      const status = (e.approvalStatus || '').toLowerCase();
+      if (status && status !== 'approved') return e;
+      return { ...e, billed: true };
+    }));
 
     try {
       await api.markAsBilled(matterId);
@@ -698,13 +763,86 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
 
   // Local Actions
   const addExpense = async (expenseData: any) => {
-    const tempExpense = { ...expenseData, id: `e-${Date.now()}` };
+    const payload = { ...expenseData };
+    const tempExpense = {
+      ...payload,
+      id: `e-${Date.now()}`,
+      approvalStatus: payload.approvalStatus || 'Pending'
+    };
     setExpenses(prev => [tempExpense, ...prev]);
     try {
-      const newExpense = await api.createExpense(expenseData);
+      const newExpense = await api.createExpense(payload);
       setExpenses(prev => [newExpense, ...prev.filter(e => e.id !== tempExpense.id)]);
     } catch (e) {
       console.error("API Error (addExpense)", e);
+    }
+  };
+
+  const approveTimeEntry = async (id: string) => {
+    const prev = timeEntries;
+    const now = new Date().toISOString();
+    setTimeEntries(items => items.map(entry =>
+      entry.id === id ? { ...entry, approvalStatus: 'Approved', approvedAt: now, rejectedAt: undefined, rejectionReason: undefined } : entry
+    ));
+    try {
+      const updated = await api.approveTimeEntry(id);
+      if (updated) {
+        setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      }
+    } catch (e) {
+      console.error("API Error (approveTimeEntry)", e);
+      setTimeEntries(prev);
+    }
+  };
+
+  const rejectTimeEntry = async (id: string, reason?: string) => {
+    const prev = timeEntries;
+    const now = new Date().toISOString();
+    setTimeEntries(items => items.map(entry =>
+      entry.id === id ? { ...entry, approvalStatus: 'Rejected', rejectedAt: now, rejectionReason: reason } : entry
+    ));
+    try {
+      const updated = await api.rejectTimeEntry(id, reason);
+      if (updated) {
+        setTimeEntries(items => items.map(entry => entry.id === id ? { ...entry, ...updated } : entry));
+      }
+    } catch (e) {
+      console.error("API Error (rejectTimeEntry)", e);
+      setTimeEntries(prev);
+    }
+  };
+
+  const approveExpense = async (id: string) => {
+    const prev = expenses;
+    const now = new Date().toISOString();
+    setExpenses(items => items.map(expense =>
+      expense.id === id ? { ...expense, approvalStatus: 'Approved', approvedAt: now, rejectedAt: undefined, rejectionReason: undefined } : expense
+    ));
+    try {
+      const updated = await api.approveExpense(id);
+      if (updated) {
+        setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      }
+    } catch (e) {
+      console.error("API Error (approveExpense)", e);
+      setExpenses(prev);
+    }
+  };
+
+  const rejectExpense = async (id: string, reason?: string) => {
+    const prev = expenses;
+    const now = new Date().toISOString();
+    setExpenses(items => items.map(expense =>
+      expense.id === id ? { ...expense, approvalStatus: 'Rejected', rejectedAt: now, rejectionReason: reason } : expense
+    ));
+    try {
+      const updated = await api.rejectExpense(id, reason);
+      if (updated) {
+        setExpenses(items => items.map(expense => expense.id === id ? { ...expense, ...updated } : expense));
+      }
+    } catch (e) {
+      console.error("API Error (rejectExpense)", e);
+      setExpenses(prev);
     }
   };
   const addMessage = (msg: Message) => setMessages(prev => [msg, ...prev]);
@@ -718,6 +856,9 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       if ('matterId' in data) payload.matterId = data.matterId ?? null;
       if ('description' in data) payload.description = data.description ?? null;
       if ('tags' in data) payload.tags = data.tags ?? null;
+      if ('category' in data) payload.category = data.category ?? null;
+      if ('status' in data) payload.status = data.status ?? null;
+      if ('legalHoldReason' in data) payload.legalHoldReason = data.legalHoldReason ?? null;
       const updated = await api.updateDocument(id, payload);
       setDocuments(prev => prev.map(doc => doc.id === id ? { ...doc, ...normalizeDocument(updated) } : doc));
     } catch (e) {
@@ -772,7 +913,7 @@ export const DataProvider = ({ children }: { children: ReactNode }) => {
       matters, clients, timeEntries, expenses, messages, events, documents, invoices, leads, tasks, taskTemplates, notifications,
       activeTimer, startTimer, stopTimer, updateTimer, pauseTimer, resumeTimer,
       addMatter, updateMatter, deleteMatter,
-      addTimeEntry, addExpense, addMessage, markMessageRead, addEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, addClient, addLead, updateLead, deleteLead, addTask,
+      addTimeEntry, addExpense, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense, addMessage, markMessageRead, addEvent, updateEvent, deleteEvent, addDocument, updateDocument, deleteDocument, addInvoice, updateInvoice, deleteInvoice, addClient, addLead, updateLead, deleteLead, addTask,
       updateTaskStatus, updateTask, deleteTask, archiveTask, createTasksFromTemplate, markAsBilled, markNotificationRead, markNotificationUnread, markAllNotificationsRead, updateUserProfile, updateClient,
       bulkAssignDocuments
     }}>

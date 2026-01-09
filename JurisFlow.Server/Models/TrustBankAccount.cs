@@ -21,6 +21,8 @@ namespace JurisFlow.Server.Models
         public string Jurisdiction { get; set; }
         public double CurrentBalance { get; set; } = 0;
         public TrustAccountStatus Status { get; set; } = TrustAccountStatus.ACTIVE;
+        public string? EntityId { get; set; }
+        public string? OfficeId { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     }

@@ -24,6 +24,7 @@ const ClientAuthContext = createContext<ClientAuthContextType | undefined>(undef
 export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
   const [client, setClient] = useState<Client | null>(null);
   const [loading, setLoading] = useState(true);
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<string | null>(null);
 
   const login = async (email: string, password: string): Promise<boolean> => {
     try {
@@ -38,6 +39,11 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
       if (typeof window !== 'undefined') {
         localStorage.setItem('client_token', data.token);
         localStorage.setItem('client_user', JSON.stringify(data.client));
+        if (data.session?.id && data.session?.expiresAt) {
+          localStorage.setItem('client_session_id', data.session.id);
+          localStorage.setItem('client_session_expires_at', data.session.expiresAt);
+          setSessionExpiresAt(data.session.expiresAt);
+        }
       }
       return true;
     } catch (e) {
@@ -51,6 +57,9 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('client_token');
       localStorage.removeItem('client_user');
+      localStorage.removeItem('client_session_id');
+      localStorage.removeItem('client_session_expires_at');
+      setSessionExpiresAt(null);
     }
   };
 
@@ -61,6 +70,10 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
       if (token && storedClient) {
         try {
           setClient(JSON.parse(storedClient));
+          const storedSessionExpiresAt = localStorage.getItem('client_session_expires_at');
+          if (storedSessionExpiresAt) {
+            setSessionExpiresAt(storedSessionExpiresAt);
+          }
         } catch {
           logout();
         }
@@ -68,6 +81,19 @@ export const ClientAuthProvider = ({ children }: { children: ReactNode }) => {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!sessionExpiresAt) return;
+    const expiresAt = new Date(sessionExpiresAt).getTime();
+    if (Number.isNaN(expiresAt)) return;
+    const delay = Math.max(0, expiresAt - Date.now());
+    if (delay === 0) {
+      logout();
+      return;
+    }
+    const timer = window.setTimeout(() => logout(), delay);
+    return () => window.clearTimeout(timer);
+  }, [sessionExpiresAt]);
 
   return (
     <ClientAuthContext.Provider value={{ client, isAuthenticated: !!client, login, logout, loading }}>

@@ -3,6 +3,7 @@ import { Timer, Pause, X } from './Icons';
 import { useData } from '../contexts/DataContext';
 import { useTranslation } from '../contexts/LanguageContext';
 import { toast } from './Toast';
+import { ActivityCode } from '../types';
 
 // Simple standalone component for the "Wow" factor
 const GlobalTimer: React.FC = () => {
@@ -103,7 +104,9 @@ const GlobalTimer: React.FC = () => {
                             rate: 450,
                             date: new Date().toISOString(),
                             billed: false,
-                            type: 'time'
+                            type: 'time',
+                            activityCode: ActivityCode.A103,
+                            isBillable: true
                           });
                           setIsRunning(false);
                           setSeconds(0);

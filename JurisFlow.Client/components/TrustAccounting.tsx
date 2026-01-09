@@ -3,17 +3,19 @@
  * ABA Model Rule 1.15 Compliant
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     AlertTriangle, DollarSign, Scale, RefreshCw,
-    Users, Plus, Eye, Check, X
+    Users, Plus, Eye, Check, X, FileText, XCircle
 } from './Icons';
-import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
+import { useAuth } from '../contexts/AuthContext';
 import {
     TrustBankAccount, ClientTrustLedger, TrustTransactionV2,
-    TrustTxStatus, TrustTransactionTypeV2, ReconciliationRecord
+    TrustTxStatus, TrustTransactionTypeV2, ReconciliationRecord, AuditLogEntry
 } from '../types';
+import { api as apiClient } from '../services/api';
+import EntityOfficeFilter from './common/EntityOfficeFilter';
 
 // Simple icons for Trust-specific actions (inline SVG)
 const ArrowDownCircle = ({ className }: { className?: string }) => (
@@ -93,16 +95,26 @@ const api = {
 };
 
 export default function TrustAccounting() {
-    const { t } = useTranslation();
     const { clients, matters } = useData();
+    const { can } = useAuth();
+    const canApprove = can('trust.approve');
+    const canVoid = can('trust.void');
+    const canDeposit = can('trust.deposit');
+    const canWithdraw = can('trust.withdraw');
+    const canReconcile = can('trust.reconcile');
 
     // State
-    const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'ledgers' | 'transactions' | 'reconciliation'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'accounts' | 'ledgers' | 'transactions' | 'reconciliation' | 'audit'>('overview');
     const [accounts, setAccounts] = useState<TrustBankAccount[]>([]);
     const [ledgers, setLedgers] = useState<ClientTrustLedger[]>([]);
     const [transactions, setTransactions] = useState<TrustTransactionV2[]>([]);
     const [reconciliations, setReconciliations] = useState<ReconciliationRecord[]>([]);
+    const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+    const [auditLoading, setAuditLoading] = useState(false);
+    const [auditFilters, setAuditFilters] = useState({ entityType: 'all', query: '' });
     const [loading, setLoading] = useState(true);
+    const [entityFilter, setEntityFilter] = useState('');
+    const [officeFilter, setOfficeFilter] = useState('');
 
     // Modal states
     const [showDepositForm, setShowDepositForm] = useState(false);
@@ -150,7 +162,9 @@ export default function TrustAccounting() {
         bankName: '',
         routingNumber: '',
         accountNumber: '',
-        jurisdiction: 'CA'  // Default to California
+        jurisdiction: 'CA',  // Default to California
+        entityId: '',
+        officeId: ''
     });
 
     // US States for IOLTA jurisdiction
@@ -178,7 +192,12 @@ export default function TrustAccounting() {
             ]);
             setAccounts(accountsData || []);
             setLedgers(ledgersData || []);
-            setTransactions(txData || []);
+            const normalizedTx = (txData || []).map((tx: any) => ({
+                ...tx,
+                status: tx.status || 'POSTED',
+                isVoided: Boolean(tx.isVoided)
+            }));
+            setTransactions(normalizedTx);
             setReconciliations(reconData || []);
             if (accountsData && accountsData.length > 0) {
                 setSelectedAccount(accountsData[0].id);
@@ -196,12 +215,92 @@ export default function TrustAccounting() {
         setLoading(false);
     };
 
+    const loadAuditLogs = async () => {
+        setAuditLoading(true);
+        try {
+            const params: any = { limit: 100 };
+            if (auditFilters.entityType !== 'all') params.entityType = auditFilters.entityType;
+            if (auditFilters.query.trim()) params.q = auditFilters.query.trim();
+            const result = await apiClient.admin.getAuditLogs(params);
+            setAuditLogs(result?.items || []);
+        } catch (err: any) {
+            console.error('Failed to load audit logs:', err);
+            toast.error('Failed to load audit logs');
+        } finally {
+            setAuditLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (activeTab !== 'audit') return;
+        loadAuditLogs();
+    }, [activeTab, auditFilters.entityType, auditFilters.query]);
+
+    const accountMap = useMemo(() => {
+        return new Map(accounts.map(a => [a.id, a]));
+    }, [accounts]);
+
+    const filteredAccounts = useMemo(() => {
+        return accounts.filter(a => {
+            if (entityFilter && a.entityId !== entityFilter) return false;
+            if (officeFilter && a.officeId !== officeFilter) return false;
+            return true;
+        });
+    }, [accounts, entityFilter, officeFilter]);
+
+    const filteredLedgers = useMemo(() => {
+        return ledgers.filter(l => {
+            const account = accountMap.get(l.trustAccountId);
+            const ledgerEntity = l.entityId || account?.entityId;
+            const ledgerOffice = l.officeId || account?.officeId;
+            if (entityFilter && ledgerEntity !== entityFilter) return false;
+            if (officeFilter && ledgerOffice !== officeFilter) return false;
+            return true;
+        });
+    }, [ledgers, accountMap, entityFilter, officeFilter]);
+
+    const filteredTransactions = useMemo(() => {
+        return transactions.filter(t => {
+            const account = accountMap.get(t.trustAccountId);
+            const txEntity = t.entityId || account?.entityId;
+            const txOffice = t.officeId || account?.officeId;
+            if (entityFilter && txEntity !== entityFilter) return false;
+            if (officeFilter && txOffice !== officeFilter) return false;
+            return true;
+        });
+    }, [transactions, accountMap, entityFilter, officeFilter]);
+
+    const filteredReconciliations = useMemo(() => {
+        return reconciliations.filter(r => {
+            const account = accountMap.get(r.trustAccountId);
+            if (!account) return false;
+            if (entityFilter && account.entityId !== entityFilter) return false;
+            if (officeFilter && account.officeId !== officeFilter) return false;
+            return true;
+        });
+    }, [reconciliations, accountMap, entityFilter, officeFilter]);
+
+    useEffect(() => {
+        if (filteredAccounts.length === 0) {
+            setSelectedAccount('');
+            return;
+        }
+        if (!filteredAccounts.some(a => a.id === selectedAccount)) {
+            const nextAccount = filteredAccounts[0];
+            setSelectedAccount(nextAccount.id);
+            setDepositForm(f => ({ ...f, trustAccountId: nextAccount.id }));
+            setWithdrawalForm(f => ({ ...f, trustAccountId: nextAccount.id }));
+            setReconcileForm(f => ({ ...f, trustAccountId: nextAccount.id }));
+            setLedgerForm(f => ({ ...f, trustAccountId: nextAccount.id }));
+        }
+    }, [filteredAccounts, selectedAccount]);
+
     // Calculate totals
-    const totalTrustBalance = accounts.reduce((sum, a) => sum + Number(a.currentBalance), 0);
-    const totalClientLedgers = ledgers.reduce((sum, l) => sum + Number(l.runningBalance), 0);
-    const pendingTransactions = transactions.filter(t => t.status === 'PENDING').length;
-    const unreconciledAccounts = accounts.filter(a => {
-        const lastRecon = reconciliations.find(r => r.trustAccountId === a.id);
+    const totalTrustBalance = filteredAccounts.reduce((sum, a) => sum + Number(a.currentBalance), 0);
+    const totalClientLedgers = filteredLedgers.reduce((sum, l) => sum + Number(l.runningBalance), 0);
+    const pendingTransactions = filteredTransactions.filter(t => t.status === 'PENDING').length;
+    const unreconciledAccounts = filteredAccounts.filter(a => {
+        const lastRecon = filteredReconciliations.find(r => r.trustAccountId === a.id);
         if (!lastRecon) return true;
         const lastReconDate = new Date(lastRecon.periodEnd);
         const monthAgo = new Date();
@@ -298,9 +397,9 @@ export default function TrustAccounting() {
             });
 
             if (result.isReconciled) {
-                toast.success('✅ Reconciliation successful! Three-way match confirmed.');
+                toast.success('Reconciliation successful. Three-way match confirmed.');
             } else {
-                toast.warning(`⚠️ Reconciliation discrepancy: $${result.discrepancy.toFixed(2)} - Review needed`);
+                toast.warning(`Reconciliation discrepancy: $${result.discrepancy.toFixed(2)} - Review needed`);
             }
 
             setShowReconcileForm(false);
@@ -351,11 +450,13 @@ export default function TrustAccounting() {
                 bankName: accountForm.bankName,
                 routingNumber: accountForm.routingNumber,
                 accountNumber: accountForm.accountNumber, // Backend expects 'accountNumber'
-                jurisdiction: accountForm.jurisdiction
+                jurisdiction: accountForm.jurisdiction,
+                entityId: accountForm.entityId || undefined,
+                officeId: accountForm.officeId || undefined
             });
             toast.success('Trust account created successfully');
             setShowCreateAccount(false);
-            setAccountForm({ name: '', bankName: '', routingNumber: '', accountNumber: '', jurisdiction: 'CA' });
+            setAccountForm({ name: '', bankName: '', routingNumber: '', accountNumber: '', jurisdiction: 'CA', entityId: '', officeId: '' });
             loadData();
         } catch (err: any) {
             toast.error(err.message || 'Failed to create trust account');
@@ -387,6 +488,17 @@ export default function TrustAccounting() {
         }
     };
 
+    const handleRejectTransaction = async (txId: string) => {
+        const reason = prompt('Rejection reason (optional):') || undefined;
+        try {
+            await api.post(`/api/trust/transactions/${txId}/reject`, { reason });
+            toast.success('Transaction rejected');
+            loadData();
+        } catch (err: any) {
+            toast.error(err.message || 'Rejection failed');
+        }
+    };
+
     // Format currency
     const formatCurrency = (amount: number) => {
         return new Intl.NumberFormat('en-US', {
@@ -397,7 +509,7 @@ export default function TrustAccounting() {
 
     // Format date
     const formatDate = (dateStr: string) => {
-        return new Date(dateStr).toLocaleDateString('tr-TR', {
+        return new Date(dateStr).toLocaleDateString('en-US', {
             day: '2-digit',
             month: '2-digit',
             year: 'numeric',
@@ -427,28 +539,41 @@ export default function TrustAccounting() {
                         ABA Model Rule 1.15 Compliant Trust Account Management
                     </p>
                 </div>
-                <div className="flex gap-2">
-                    <button
-                        onClick={() => setShowDepositForm(true)}
-                        className="btn-primary flex items-center gap-2"
-                    >
-                        <ArrowDownCircle className="w-4 h-4" />
-                        Deposit
-                    </button>
-                    <button
-                        onClick={() => setShowWithdrawalForm(true)}
-                        className="btn-secondary flex items-center gap-2"
-                    >
-                        <ArrowUpCircle className="w-4 h-4" />
-                        Withdrawal
-                    </button>
-                    <button
-                        onClick={() => setShowReconcileForm(true)}
-                        className="btn-outline flex items-center gap-2"
-                    >
-                        <Calculator className="w-4 h-4" />
-                        Mutabakat
-                    </button>
+                <div className="flex flex-wrap items-center gap-3">
+                    <EntityOfficeFilter
+                        entityId={entityFilter}
+                        officeId={officeFilter}
+                        onEntityChange={setEntityFilter}
+                        onOfficeChange={setOfficeFilter}
+                        allowAll
+                    />
+                    {canDeposit && (
+                        <button
+                            onClick={() => setShowDepositForm(true)}
+                            className="btn-primary flex items-center gap-2"
+                        >
+                            <ArrowDownCircle className="w-4 h-4" />
+                            Deposit
+                        </button>
+                    )}
+                    {canWithdraw && (
+                        <button
+                            onClick={() => setShowWithdrawalForm(true)}
+                            className="btn-secondary flex items-center gap-2"
+                        >
+                            <ArrowUpCircle className="w-4 h-4" />
+                            Withdrawal
+                        </button>
+                    )}
+                    {canReconcile && (
+                        <button
+                            onClick={() => setShowReconcileForm(true)}
+                            className="btn-outline flex items-center gap-2"
+                        >
+                            <Calculator className="w-4 h-4" />
+                            Reconcile
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -460,7 +585,7 @@ export default function TrustAccounting() {
                             <DollarSign className="w-6 h-6 text-green-600" />
                         </div>
                         <div>
-                            <p className="text-sm text-gray-500">Trust Hesap Bakiyesi</p>
+                            <p className="text-sm text-gray-500">Trust Account Balance</p>
                             <p className="text-xl font-bold text-gray-900 dark:text-white">
                                 {formatCurrency(totalTrustBalance)}
                             </p>
@@ -488,7 +613,7 @@ export default function TrustAccounting() {
                             <CheckCircle2 className={`w-6 h-6 ${pendingTransactions > 0 ? 'text-yellow-600' : 'text-gray-400'}`} />
                         </div>
                         <div>
-                            <p className="text-sm text-gray-500">Bekleyen Onay</p>
+                            <p className="text-sm text-gray-500">Pending Approvals</p>
                             <p className="text-xl font-bold text-gray-900 dark:text-white">
                                 {pendingTransactions}
                             </p>
@@ -522,12 +647,12 @@ export default function TrustAccounting() {
                         <AlertTriangle className="w-6 h-6 text-red-600" />
                         <div>
                             <h3 className="font-semibold text-red-800 dark:text-red-200">
-                                ⚠️ Balance Discrepancy Detected
+                                 Balance Discrepancy Detected
                             </h3>
                             <p className="text-sm text-red-700 dark:text-red-300">
                                 Trust account balance ({formatCurrency(totalTrustBalance)}) does not match client ledgers total
                                 ({formatCurrency(totalClientLedgers)}).
-                                Fark: {formatCurrency(Math.abs(totalTrustBalance - totalClientLedgers))}
+                                Difference: {formatCurrency(Math.abs(totalTrustBalance - totalClientLedgers))}
                             </p>
                         </div>
                     </div>
@@ -542,7 +667,8 @@ export default function TrustAccounting() {
                         { id: 'accounts', label: 'Accounts', icon: Building2 },
                         { id: 'ledgers', label: 'Client Ledgers', icon: Users },
                         { id: 'transactions', label: 'Transactions', icon: History },
-                        { id: 'reconciliation', label: 'Reconciliation', icon: FileCheck }
+                        { id: 'reconciliation', label: 'Reconciliation', icon: FileCheck },
+                        { id: 'audit', label: 'Audit Log', icon: FileText }
                     ].map(tab => (
                         <button
                             key={tab.id}
@@ -567,7 +693,14 @@ export default function TrustAccounting() {
                         <div className="flex items-center justify-between">
                             <h2 className="text-lg font-semibold">Trust Bank Accounts</h2>
                             <button
-                                onClick={() => setShowCreateAccount(true)}
+                                onClick={() => {
+                                    setAccountForm(prev => ({
+                                        ...prev,
+                                        entityId: entityFilter || prev.entityId,
+                                        officeId: officeFilter || prev.officeId
+                                    }));
+                                    setShowCreateAccount(true);
+                                }}
                                 className="btn-sm btn-primary flex items-center gap-1"
                             >
                                 <Plus className="w-4 h-4" /> New Account
@@ -589,7 +722,7 @@ export default function TrustAccounting() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {accounts.map(account => (
+                                        {filteredAccounts.map(account => (
                                             <tr key={account.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4 font-medium">{account.name}</td>
                                                 <td className="py-3 px-4">{account.bankName}</td>
@@ -642,7 +775,7 @@ export default function TrustAccounting() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {ledgers.map(ledger => (
+                                        {filteredLedgers.map(ledger => (
                                             <tr key={ledger.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4 font-medium">
                                                     {(ledger as any).client?.name || ledger.clientId}
@@ -696,7 +829,7 @@ export default function TrustAccounting() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {transactions.map(tx => (
+                                        {filteredTransactions.map(tx => (
                                             <tr key={tx.id} className={`border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 ${tx.isVoided ? 'opacity-50 line-through' : ''}`}>
                                                 <td className="py-3 px-4 text-sm">{formatDate(tx.createdAt)}</td>
                                                 <td className="py-3 px-4">
@@ -727,16 +860,25 @@ export default function TrustAccounting() {
                                                     </span>
                                                 </td>
                                                 <td className="py-3 px-4 text-center">
-                                                    {!tx.isVoided && tx.status === 'PENDING' && (
-                                                        <button
-                                                            onClick={() => handleApproveTransaction(tx.id)}
-                                                            className="text-green-600 hover:text-green-800 mr-2"
-                                                            title="Onayla"
-                                                        >
-                                                            <CheckCircle2 className="w-4 h-4" />
-                                                        </button>
+                                                    {!tx.isVoided && tx.status === 'PENDING' && canApprove && (
+                                                        <div className="inline-flex items-center gap-2">
+                                                            <button
+                                                                onClick={() => handleApproveTransaction(tx.id)}
+                                                                className="text-green-600 hover:text-green-800"
+                                                                title="Approve"
+                                                            >
+                                                                <CheckCircle2 className="w-4 h-4" />
+                                                            </button>
+                                                            <button
+                                                                onClick={() => handleRejectTransaction(tx.id)}
+                                                                className="text-red-600 hover:text-red-800"
+                                                                title="Reject"
+                                                            >
+                                                                <XCircle className="w-4 h-4" />
+                                                            </button>
+                                                        </div>
                                                     )}
-                                                    {!tx.isVoided && tx.status === 'APPROVED' && (
+                                                    {!tx.isVoided && tx.status === 'APPROVED' && canVoid && (
                                                         <button
                                                             onClick={() => handleVoidTransaction(tx.id)}
                                                             className="text-red-600 hover:text-red-800"
@@ -776,7 +918,7 @@ export default function TrustAccounting() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {reconciliations.map(recon => (
+                                        {filteredReconciliations.map(recon => (
                                             <tr key={recon.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
                                                 <td className="py-3 px-4">{formatDate(recon.periodEnd)}</td>
                                                 <td className="py-3 px-4">
@@ -796,15 +938,97 @@ export default function TrustAccounting() {
                                                         ? 'bg-green-100 text-green-800'
                                                         : 'bg-red-100 text-red-800'
                                                         }`}>
-                                                        {recon.isReconciled ? '✓ Matched' : `Diff: ${formatCurrency(Number(recon.discrepancyAmount || 0))}`}
+                                                        {recon.isReconciled ? 'Matched' : `Diff: ${formatCurrency(Number(recon.discrepancyAmount || 0))}`}
                                                     </span>
                                                 </td>
                                                 <td className="py-3 px-4 text-center">
                                                     {recon.approvedAt ? (
-                                                        <span className="text-green-600">✓ Approved</span>
+                                                        <span className="text-green-600">Approved</span>
                                                     ) : (
                                                         <span className="text-yellow-600">Pending</span>
                                                     )}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* Audit Log Tab */}
+                {activeTab === 'audit' && (
+                    <div className="space-y-4">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-lg font-semibold">Audit Log</h2>
+                            <button
+                                onClick={loadAuditLogs}
+                                className="btn-sm btn-outline flex items-center gap-1"
+                            >
+                                <RefreshCw className="w-4 h-4" /> Refresh
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-500 mb-1">Entity Type</label>
+                                <select
+                                    value={auditFilters.entityType}
+                                    onChange={(e) => setAuditFilters(prev => ({ ...prev, entityType: e.target.value }))}
+                                    className="input w-full"
+                                >
+                                    <option value="all">All</option>
+                                    <option value="TrustBankAccount">Trust Bank Account</option>
+                                    <option value="ClientTrustLedger">Client Ledger</option>
+                                    <option value="TrustTransaction">Trust Transaction</option>
+                                    <option value="ReconciliationRecord">Reconciliation</option>
+                                </select>
+                            </div>
+                            <div className="md:col-span-2">
+                                <label className="block text-xs font-semibold text-gray-500 mb-1">Search</label>
+                                <input
+                                    value={auditFilters.query}
+                                    onChange={(e) => setAuditFilters(prev => ({ ...prev, query: e.target.value }))}
+                                    className="input w-full"
+                                    placeholder="Search by user, action, or details"
+                                />
+                            </div>
+                        </div>
+
+                        {auditLoading ? (
+                            <div className="text-sm text-gray-500">Loading audit logs...</div>
+                        ) : auditLogs.length === 0 ? (
+                            <div className="text-sm text-gray-500">No audit log entries found.</div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr className="border-b dark:border-gray-700 text-xs uppercase text-gray-400">
+                                            <th className="text-left py-3 px-4">Timestamp</th>
+                                            <th className="text-left py-3 px-4">Action</th>
+                                            <th className="text-left py-3 px-4">Entity</th>
+                                            <th className="text-left py-3 px-4">Actor</th>
+                                            <th className="text-left py-3 px-4">Details</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {auditLogs.map(log => (
+                                            <tr key={log.id} className="border-b dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800">
+                                                <td className="py-3 px-4 text-sm text-gray-600">
+                                                    {formatDate(log.createdAt)}
+                                                </td>
+                                                <td className="py-3 px-4 text-sm font-medium text-gray-800">
+                                                    {log.action}
+                                                </td>
+                                                <td className="py-3 px-4 text-sm text-gray-600">
+                                                    {log.entityType}
+                                                </td>
+                                                <td className="py-3 px-4 text-sm text-gray-600">
+                                                    {log.userEmail || log.clientEmail || 'System'}
+                                                </td>
+                                                <td className="py-3 px-4 text-sm text-gray-500">
+                                                    {log.details || '-'}
                                                 </td>
                                             </tr>
                                         ))}
@@ -850,7 +1074,7 @@ export default function TrustAccounting() {
                         <div>
                             <h3 className="text-lg font-semibold mb-4">Client Balances</h3>
                             <div className="space-y-2">
-                                {ledgers.slice(0, 5).map(ledger => (
+                                {filteredLedgers.slice(0, 5).map(ledger => (
                                     <div key={ledger.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
                                         <div>
                                             <p className="font-medium text-sm">
@@ -888,7 +1112,7 @@ export default function TrustAccounting() {
                                     className="input w-full"
                                     required
                                 >
-                                    {accounts.map(a => (
+                                    {filteredAccounts.map(a => (
                                         <option key={a.id} value={a.id}>{a.name}</option>
                                     ))}
                                 </select>
@@ -951,7 +1175,7 @@ export default function TrustAccounting() {
                                             className="input flex-1"
                                         >
                                             <option value="">Select Ledger...</option>
-                                            {ledgers.filter(l => l.status === 'ACTIVE').map(l => (
+                                            {filteredLedgers.filter(l => l.status === 'ACTIVE').map(l => (
                                                 <option key={l.id} value={l.id}>
                                                     {(l as any).client?.name || l.clientId} - {formatCurrency(Number(l.runningBalance))}
                                                 </option>
@@ -1013,7 +1237,7 @@ export default function TrustAccounting() {
                                     className="input w-full"
                                     required
                                 >
-                                    {accounts.map(a => (
+                                    {filteredAccounts.map(a => (
                                         <option key={a.id} value={a.id}>{a.name} - {formatCurrency(Number(a.currentBalance))}</option>
                                     ))}
                                 </select>
@@ -1027,7 +1251,7 @@ export default function TrustAccounting() {
                                     required
                                 >
                                     <option value="">Select Ledger...</option>
-                                    {ledgers.filter(l => l.status === 'ACTIVE' && Number(l.runningBalance) > 0).map(l => (
+                                    {filteredLedgers.filter(l => l.status === 'ACTIVE' && Number(l.runningBalance) > 0).map(l => (
                                         <option key={l.id} value={l.id}>
                                             {(l as any).client?.name || l.clientId} - Available: {formatCurrency(Number(l.runningBalance))}
                                         </option>
@@ -1107,7 +1331,7 @@ export default function TrustAccounting() {
                                     className="input w-full"
                                     required
                                 >
-                                    {accounts.map(a => (
+                                    {filteredAccounts.map(a => (
                                         <option key={a.id} value={a.id}>{a.name}</option>
                                     ))}
                                 </select>
@@ -1150,9 +1374,9 @@ export default function TrustAccounting() {
                                     Three-Way Check:
                                 </p>
                                 <ul className="text-blue-700 dark:text-blue-300 space-y-1">
-                                    <li>✓ Bank Statement Balance</li>
-                                    <li>✓ Trust Account Balance (Software)</li>
-                                    <li>✓ Client Ledgers Total</li>
+                                    <li>Bank Statement Balance</li>
+                                    <li>Trust Account Balance (Software)</li>
+                                    <li>Client Ledgers Total</li>
                                 </ul>
                             </div>
 
@@ -1187,7 +1411,7 @@ export default function TrustAccounting() {
                                     required
                                 >
                                     <option value="">Select Trust Account...</option>
-                                    {accounts.map(a => (
+                                    {filteredAccounts.map(a => (
                                         <option key={a.id} value={a.id}>{a.name} - {a.bankName}</option>
                                     ))}
                                 </select>
@@ -1259,6 +1483,17 @@ export default function TrustAccounting() {
                             Create Trust Bank Account
                         </h2>
                         <form onSubmit={handleCreateAccount} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium mb-2">Entity & Office</label>
+                                <EntityOfficeFilter
+                                    entityId={accountForm.entityId}
+                                    officeId={accountForm.officeId}
+                                    onEntityChange={(id) => setAccountForm(prev => ({ ...prev, entityId: id, officeId: '' }))}
+                                    onOfficeChange={(id) => setAccountForm(prev => ({ ...prev, officeId: id }))}
+                                    autoSelectDefault
+                                />
+                                <p className="text-xs text-gray-500 mt-2">Use the entity/office defaults if you leave this blank.</p>
+                            </div>
                             <div>
                                 <label className="block text-sm font-medium mb-1">Account Name *</label>
                                 <input

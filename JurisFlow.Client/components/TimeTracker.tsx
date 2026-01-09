@@ -1,17 +1,21 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useData } from '../contexts/DataContext';
 import { useTranslation } from '../contexts/LanguageContext';
-import { Clock, Pause, Timer, CheckSquare, CreditCard, Plus, X, Camera } from './Icons';
+import { Clock, Pause, Timer, CheckSquare, CreditCard, Plus, Camera, Check, XCircle } from './Icons';
 import Tesseract from 'tesseract.js';
 import { TimeEntry, Expense, ActivityCode, ExpenseCode } from '../types';
 import { toast } from './Toast';
+import { useAuth } from '../contexts/AuthContext';
 
 const TimeTracker = () => {
     const { t, formatCurrency, formatDate } = useTranslation();
-    const { matters, addTimeEntry, addExpense, timeEntries, expenses, activeTimer, startTimer, stopTimer, pauseTimer, resumeTimer } = useData();
+    const { matters, addTimeEntry, addExpense, timeEntries, expenses, activeTimer, startTimer, stopTimer, pauseTimer, resumeTimer, approveTimeEntry, rejectTimeEntry, approveExpense, rejectExpense } = useData();
+    const { can } = useAuth();
+    const canApprove = can('billing.approve');
 
     const [activeTab, setActiveTab] = useState<'time' | 'expense'>('time');
     const [showBilled, setShowBilled] = useState(false);
+    const [approvalFilter, setApprovalFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
 
     // Display-only state (synced with activeTimer)
     const [timerDisplay, setTimerDisplay] = useState(0);
@@ -40,6 +44,12 @@ const TimeTracker = () => {
             // Sync rate if it exists in timer
             if (activeTimer.rate) {
                 setHourlyRate(activeTimer.rate);
+            }
+            if (activeTimer.activityCode) {
+                setActivityCode(activeTimer.activityCode);
+            }
+            if (activeTimer.isBillable !== undefined) {
+                setIsBillable(activeTimer.isBillable);
             }
         }
     }, [activeTimer?.startTime, activeTimer?.elapsed]);
@@ -137,7 +147,7 @@ const TimeTracker = () => {
     const handleToggleTimer = () => {
         if (!activeTimer) {
             // START NEW TIMER
-            startTimer(selectedMatterId || undefined, description, Number(hourlyRate) || 0);
+            startTimer(selectedMatterId || undefined, description, Number(hourlyRate) || 0, activityCode, isBillable);
         } else {
             if (activeTimer.isRunning) {
                 pauseTimer();
@@ -175,7 +185,8 @@ const TimeTracker = () => {
             date: new Date().toISOString(),
             category: expenseCategory as any,
             billed: false,
-            type: 'expense'
+            type: 'expense',
+            expenseCode: expenseCategory
         };
 
         addExpense(newExpense);
@@ -183,6 +194,41 @@ const TimeTracker = () => {
         setExpenseAmount('');
         setExpenseDesc('');
         setExpenseMatterId(''); // Reset matter selection
+    };
+
+    const normalizeApprovalStatus = (status?: string) => {
+        if (!status) return 'Approved';
+        const normalized = status.toLowerCase();
+        if (normalized === 'approved') return 'Approved';
+        if (normalized === 'pending') return 'Pending';
+        if (normalized === 'rejected') return 'Rejected';
+        return status;
+    };
+
+    const getApprovalBadgeClass = (status: string) => {
+        if (status === 'Approved') return 'bg-emerald-100 text-emerald-700';
+        if (status === 'Pending') return 'bg-yellow-100 text-yellow-700';
+        if (status === 'Rejected') return 'bg-red-100 text-red-700';
+        return 'bg-gray-100 text-gray-600';
+    };
+
+    const handleApproveEntry = async (entry: TimeEntry | Expense) => {
+        if (entry.type === 'expense') {
+            await approveExpense(entry.id);
+        } else {
+            await approveTimeEntry(entry.id);
+        }
+        toast.success('Entry approved');
+    };
+
+    const handleRejectEntry = async (entry: TimeEntry | Expense) => {
+        const reason = prompt('Rejection reason (optional):') || undefined;
+        if (entry.type === 'expense') {
+            await rejectExpense(entry.id, reason);
+        } else {
+            await rejectTimeEntry(entry.id, reason);
+        }
+        toast.success('Entry rejected');
     };
 
     const formatSeconds = (sec: number) => {
@@ -199,6 +245,20 @@ const TimeTracker = () => {
     ]
         .filter(entry => showBilled ? true : !entry.billed)
         .sort((a, b) => b.sortDate.getTime() - a.sortDate.getTime());
+
+    const approvalCounts = allEntries.reduce((acc, entry) => {
+        const status = normalizeApprovalStatus(entry.approvalStatus) || 'Pending';
+        if (status === 'Pending') acc.pending += 1;
+        if (status === 'Approved') acc.approved += 1;
+        if (status === 'Rejected') acc.rejected += 1;
+        return acc;
+    }, { pending: 0, approved: 0, rejected: 0 });
+
+    const filteredEntries = allEntries.filter(entry => {
+        if (approvalFilter === 'all') return true;
+        const status = (normalizeApprovalStatus(entry.approvalStatus) || 'pending').toLowerCase();
+        return status === approvalFilter;
+    });
 
     const isRunning = activeTimer?.isRunning || false;
     const hasActiveTimer = !!activeTimer;
@@ -415,22 +475,50 @@ const TimeTracker = () => {
                     <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                         <div className="flex items-center gap-3">
                             <h3 className="font-bold text-slate-800">{t('recent_entries')}</h3>
-                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full font-bold">{allEntries.length} Items</span>
+                            <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full font-bold">{filteredEntries.length} Items</span>
                         </div>
-                        <label className="flex items-center gap-2 text-xs font-bold text-gray-500 cursor-pointer select-none">
-                            <input
-                                type="checkbox"
-                                checked={showBilled}
-                                onChange={e => setShowBilled(e.target.checked)}
-                                className="rounded border-gray-300 text-slate-900 focus:ring-slate-900"
-                            />
-                            Show Billed / Archived
-                        </label>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <div className="flex items-center gap-2 text-xs font-bold text-gray-500">
+                                <button
+                                    onClick={() => setApprovalFilter('all')}
+                                    className={`px-2.5 py-1 rounded-full border ${approvalFilter === 'all' ? 'bg-slate-900 text-white border-slate-900' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+                                >
+                                    All
+                                </button>
+                                <button
+                                    onClick={() => setApprovalFilter('pending')}
+                                    className={`px-2.5 py-1 rounded-full border ${approvalFilter === 'pending' ? 'bg-amber-500 text-white border-amber-500' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+                                >
+                                    Pending ({approvalCounts.pending})
+                                </button>
+                                <button
+                                    onClick={() => setApprovalFilter('approved')}
+                                    className={`px-2.5 py-1 rounded-full border ${approvalFilter === 'approved' ? 'bg-emerald-600 text-white border-emerald-600' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+                                >
+                                    Approved ({approvalCounts.approved})
+                                </button>
+                                <button
+                                    onClick={() => setApprovalFilter('rejected')}
+                                    className={`px-2.5 py-1 rounded-full border ${approvalFilter === 'rejected' ? 'bg-red-600 text-white border-red-600' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
+                                >
+                                    Rejected ({approvalCounts.rejected})
+                                </button>
+                            </div>
+                            <label className="flex items-center gap-2 text-xs font-bold text-gray-500 cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={showBilled}
+                                    onChange={e => setShowBilled(e.target.checked)}
+                                    className="rounded border-gray-300 text-slate-900 focus:ring-slate-900"
+                                />
+                                Show Billed / Archived
+                            </label>
+                        </div>
                     </div>
 
                     {/* SCROLLABLE TABLE CONTAINER */}
                     <div className="flex-1 overflow-y-auto">
-                        {allEntries.length === 0 ? (
+                        {filteredEntries.length === 0 ? (
                             <div className="flex flex-col items-center justify-center h-full text-gray-400">
                                 <Clock className="w-12 h-12 mb-2 opacity-20" />
                                 <p>No activity logged yet.</p>
@@ -445,13 +533,19 @@ const TimeTracker = () => {
                                         <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">{t('description')}</th>
                                         <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">{t('duration')}</th>
                                         <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">{t('status')}</th>
+                                        <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider">Approval</th>
                                         <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">{t('expense_amount')} / Cost</th>
+                                        {canApprove && (
+                                            <th className="px-6 py-3 text-xs font-bold text-gray-500 uppercase tracking-wider text-right">Actions</th>
+                                        )}
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-100">
-                                    {allEntries.map((entry) => {
+                                    {filteredEntries.map((entry) => {
                                         const matter = matters.find(m => m.id === entry.matterId);
                                         const isExp = entry.type === 'expense';
+                                        const approvalStatus = normalizeApprovalStatus(entry.approvalStatus);
+                                        const canReview = canApprove && approvalStatus === 'Pending' && !entry.billed;
                                         // Calculate cost correctly: Expense Amount OR (Minutes / 60) * Rate
                                         const cost = isExp
                                             ? (entry as Expense).amount
@@ -477,9 +571,39 @@ const TimeTracker = () => {
                                                         {entry.billed ? 'Billed' : 'Unbilled'}
                                                     </span>
                                                 </td>
+                                                <td className="px-6 py-4">
+                                                    <span
+                                                        title={approvalStatus === 'Rejected' ? (entry as any).rejectionReason || 'Rejected' : undefined}
+                                                        className={`px-2 py-1 text-xs font-bold rounded ${getApprovalBadgeClass(approvalStatus)}`}
+                                                    >
+                                                        {approvalStatus}
+                                                    </span>
+                                                </td>
                                                 <td className="px-6 py-4 text-sm font-bold text-slate-800 text-right">
                                                     {formatCurrency(cost)}
                                                 </td>
+                                                {canApprove && (
+                                                    <td className="px-6 py-4 text-right">
+                                                        {canReview && (
+                                                            <div className="inline-flex items-center gap-2">
+                                                                <button
+                                                                    onClick={() => handleApproveEntry(entry as any)}
+                                                                    className="text-emerald-600 hover:text-emerald-800"
+                                                                    title="Approve"
+                                                                >
+                                                                    <Check className="w-4 h-4" />
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleRejectEntry(entry as any)}
+                                                                    className="text-red-600 hover:text-red-800"
+                                                                    title="Reject"
+                                                                >
+                                                                    <XCircle className="w-4 h-4" />
+                                                                </button>
+                                                            </div>
+                                                        )}
+                                                    </td>
+                                                )}
                                             </tr>
                                         )
                                     })}

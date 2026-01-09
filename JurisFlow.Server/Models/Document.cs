@@ -34,6 +34,12 @@ namespace JurisFlow.Server.Models
         public string? Category { get; set; }
         public string? Description { get; set; }
         public string? Tags { get; set; } // JSON string
+        public string? Status { get; set; } = "Draft";
+        public string? LegalHoldReason { get; set; }
+        public DateTime? LegalHoldPlacedAt { get; set; }
+        public string? LegalHoldPlacedBy { get; set; }
+        public DateTime? LegalHoldReleasedAt { get; set; }
+        public string? LegalHoldReleasedBy { get; set; }
 
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;

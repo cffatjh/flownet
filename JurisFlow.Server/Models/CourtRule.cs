@@ -31,7 +31,7 @@ namespace JurisFlow.Server.Models
         public string? CourtType { get; set; }
 
         /// <summary>
-        /// Rule citation (e.g., "CCP § 1005(b)")
+        /// Rule citation (e.g., "CCP Sec. 1005(b)")
         /// </summary>
         public string? Citation { get; set; }
 

@@ -40,6 +40,16 @@ namespace JurisFlow.Server.Models
         public string? EmergencyContact { get; set; }
         public string? EmergencyPhone { get; set; }
 
+        public string? EntityId { get; set; }
+
+        [ForeignKey("EntityId")]
+        public FirmEntity? Entity { get; set; }
+
+        public string? OfficeId { get; set; }
+
+        [ForeignKey("OfficeId")]
+        public Office? Office { get; set; }
+
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

@@ -1,17 +1,20 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { CreditCard, Plus, X, Search, Filter, Download, Edit, Trash2, CheckCircle, AlertCircle, Clock, DollarSign, FileText, Send, AlertTriangle } from './Icons';
 import { Can } from './common/Can';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
-import { Invoice, InvoiceStatus } from '../types';
+import { Invoice, InvoiceStatus, BillingSettings } from '../types';
 import { toast } from './Toast';
 import PaymentHistory from './PaymentHistory';
 import { useConfirm } from './ConfirmDialog';
+import { api } from '../services/api';
+import EntityOfficeFilter from './common/EntityOfficeFilter';
 
 // Helper functions for status checks (handles both legacy strings and new enums)
 const isPaid = (status: any) => status === 'Paid' || status === 'PAID';
 const isDraft = (status: any) => status === 'Draft' || status === 'DRAFT';
 const isApproved = (status: any) => status === 'APPROVED';
+const isEntryApproved = (status?: string) => !status || status.toLowerCase() === 'approved';
 
 // Extended Invoice type with additional fields
 interface ExtendedInvoice {
@@ -28,6 +31,9 @@ interface ExtendedInvoice {
         rate: number;
         amount: number;
         type: 'time' | 'expense' | 'fixed' | string;
+        activityCode?: string;
+        taskCode?: string;
+        expenseCode?: string;
     }[];
     payments?: {
         id: string;
@@ -53,11 +59,15 @@ const Billing: React.FC = () => {
     const [showDetailModal, setShowDetailModal] = useState(false);
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [selectedInvoice, setSelectedInvoice] = useState<ExtendedInvoice | null>(null);
+    const [billingSettings, setBillingSettings] = useState<BillingSettings | null>(null);
+    const [settingsLoading, setSettingsLoading] = useState(false);
 
     // Filter states
     const [searchQuery, setSearchQuery] = useState('');
     const [statusFilter, setStatusFilter] = useState<string>('all');
     const [dateRange, setDateRange] = useState({ from: '', to: '' });
+    const [entityFilter, setEntityFilter] = useState('');
+    const [officeFilter, setOfficeFilter] = useState('');
 
     // Create invoice form state
     const [selectedMatterId, setSelectedMatterId] = useState('');
@@ -65,12 +75,53 @@ const Billing: React.FC = () => {
     const [invoiceTerms, setInvoiceTerms] = useState('Payment due within 14 days');
     const [taxRate, setTaxRate] = useState(0);
     const [discountAmount, setDiscountAmount] = useState(0);
+    const [invoiceEntityId, setInvoiceEntityId] = useState('');
+    const [invoiceOfficeId, setInvoiceOfficeId] = useState('');
 
     // Payment form state
     const [paymentAmount, setPaymentAmount] = useState('');
     const [paymentMethod, setPaymentMethod] = useState('Bank Transfer');
     const [paymentReference, setPaymentReference] = useState('');
     const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+
+    useEffect(() => {
+        let isMounted = true;
+        const loadSettings = async () => {
+            setSettingsLoading(true);
+            try {
+                const data = await api.settings.getBilling();
+                if (data && isMounted) {
+                    setBillingSettings(data);
+                }
+            } catch (error) {
+                console.error('Failed to load billing settings', error);
+            } finally {
+                if (isMounted) setSettingsLoading(false);
+            }
+        };
+        loadSettings();
+        return () => {
+            isMounted = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!billingSettings || !showCreateModal) return;
+        setTaxRate(billingSettings.defaultTaxRate || 0);
+        const termsDays = billingSettings.defaultPaymentTerms || 30;
+        setInvoiceTerms(`Payment due within ${termsDays} days`);
+    }, [billingSettings, showCreateModal]);
+
+    useEffect(() => {
+        if (!selectedMatterId) {
+            setInvoiceEntityId('');
+            setInvoiceOfficeId('');
+            return;
+        }
+        const matter = matters.find(m => m.id === selectedMatterId);
+        setInvoiceEntityId(matter?.entityId || '');
+        setInvoiceOfficeId(matter?.officeId || '');
+    }, [selectedMatterId, matters]);
 
     // Stats calculations
     const stats = useMemo(() => {
@@ -125,9 +176,11 @@ const Billing: React.FC = () => {
             // Date range
             if (dateRange.from && new Date(inv.dueDate) < new Date(dateRange.from)) return false;
             if (dateRange.to && new Date(inv.dueDate) > new Date(dateRange.to)) return false;
+            if (entityFilter && inv.entityId !== entityFilter) return false;
+            if (officeFilter && inv.officeId !== officeFilter) return false;
             return true;
         });
-    }, [invoices, searchQuery, statusFilter, dateRange]);
+    }, [invoices, searchQuery, statusFilter, dateRange, entityFilter, officeFilter]);
 
     // Calculate invoice preview
     const invoicePreview = useMemo(() => {
@@ -138,6 +191,8 @@ const Billing: React.FC = () => {
 
         const matTime = timeEntries
             .filter(t => t.matterId === selectedMatterId && !t.billed)
+            .filter(t => t.isBillable !== false)
+            .filter(t => isEntryApproved(t.approvalStatus))
             .map(t => ({
                 id: t.id,
                 description: t.description,
@@ -145,10 +200,13 @@ const Billing: React.FC = () => {
                 rate: t.rate,
                 amount: (t.duration / 60) * t.rate,
                 type: 'time' as const,
+                activityCode: t.activityCode,
+                taskCode: t.taskCode
             }));
 
         const matExp = expenses
             .filter(e => e.matterId === selectedMatterId && !e.billed)
+            .filter(e => isEntryApproved(e.approvalStatus))
             .map(e => ({
                 id: e.id,
                 description: e.description,
@@ -156,6 +214,7 @@ const Billing: React.FC = () => {
                 rate: e.amount,
                 amount: e.amount,
                 type: 'expense' as const,
+                expenseCode: e.expenseCode
             }));
 
         const lineItems = [...matTime, ...matExp];
@@ -175,6 +234,21 @@ const Billing: React.FC = () => {
         };
     }, [selectedMatterId, matters, timeEntries, expenses, taxRate, discountAmount]);
 
+    const utbmsIssues = useMemo(() => {
+        if (!billingSettings?.utbmsCodesRequired || !invoicePreview) return [];
+        const issues: string[] = [];
+        invoicePreview.lineItems.forEach((item, idx) => {
+            const lineNumber = idx + 1;
+            if (item.type === 'time' && !item.activityCode) {
+                issues.push(`Line ${lineNumber}: Missing activity code`);
+            }
+            if (item.type === 'expense' && !item.expenseCode) {
+                issues.push(`Line ${lineNumber}: Missing expense code`);
+            }
+        });
+        return issues;
+    }, [billingSettings, invoicePreview]);
+
     // Create Invoice
     const handleCreateInvoice = (e: React.FormEvent) => {
         e.preventDefault();
@@ -185,12 +259,20 @@ const Billing: React.FC = () => {
             return;
         }
 
+        if (utbmsIssues.length > 0) {
+            toast.error('UTBMS codes are required for this invoice.');
+            return;
+        }
+
+        const resolvedEntityId = invoiceEntityId || invoicePreview.matter.entityId || '';
+        const resolvedOfficeId = invoiceOfficeId || invoicePreview.matter.officeId || '';
+
         const newInvoice: ExtendedInvoice = {
             id: `inv${Date.now()}`,
             number: `INV-${new Date().getFullYear()}-${String(invoices.length + 1).padStart(4, '0')}`,
             client: invoicePreview.matter.client,
             amount: invoicePreview.total,
-            dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+            dueDate: new Date(Date.now() + (billingSettings?.defaultPaymentTerms ?? 14) * 24 * 60 * 60 * 1000).toISOString(),
             status: 'DRAFT',
             lineItems: invoicePreview.lineItems,
             notes: invoiceNotes,
@@ -198,9 +280,15 @@ const Billing: React.FC = () => {
             tax: invoicePreview.taxAmount,
             discount: discountAmount,
             subtotal: invoicePreview.subtotal,
+            entityId: resolvedEntityId || undefined,
+            officeId: resolvedOfficeId || undefined
         };
 
-        addInvoice(newInvoice);
+        addInvoice({
+            ...newInvoice,
+            entityId: resolvedEntityId || undefined,
+            officeId: resolvedOfficeId || undefined
+        });
         markAsBilled(selectedMatterId);
 
         // Reset form
@@ -209,6 +297,8 @@ const Billing: React.FC = () => {
         setInvoiceNotes('');
         setTaxRate(0);
         setDiscountAmount(0);
+        setInvoiceEntityId('');
+        setInvoiceOfficeId('');
         toast.success('Invoice created successfully!');
     };
 
@@ -275,6 +365,26 @@ const Billing: React.FC = () => {
         toast.success('Invoice sent to client!');
     };
 
+    const handleExportLedes = async (invoice: ExtendedInvoice) => {
+        try {
+            const result = await api.exportInvoiceLedes(invoice.id);
+            if (!result) return;
+            const { blob, filename } = result;
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename || `invoice_${invoice.number || invoice.id}_ledes.dat`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+            toast.success('LEDES file downloaded.');
+        } catch (error) {
+            console.error('LEDES export failed', error);
+            toast.error('Failed to export LEDES.');
+        }
+    };
+
     // Delete Invoice
     const handleDeleteInvoice = async (invoice: ExtendedInvoice) => {
         const ok = await confirm({
@@ -319,6 +429,15 @@ const Billing: React.FC = () => {
         return !isPaid(invoice.status) && new Date(invoice.dueDate) < new Date();
     };
 
+    const handleOpenCreateModal = () => {
+        setShowCreateModal(true);
+        if (billingSettings) {
+            setTaxRate(billingSettings.defaultTaxRate || 0);
+            const termsDays = billingSettings.defaultPaymentTerms || 30;
+            setInvoiceTerms(`Payment due within ${termsDays} days`);
+        }
+    };
+
     return (
         <div className="h-full flex flex-col bg-gray-50/50">
             {/* Header */}
@@ -330,8 +449,9 @@ const Billing: React.FC = () => {
                     </div>
                     <Can perform="billing.manage">
                         <button
-                            onClick={() => setShowCreateModal(true)}
-                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors shadow-sm"
+                            onClick={handleOpenCreateModal}
+                            disabled={settingsLoading}
+                            className="flex items-center gap-2 px-4 py-2.5 bg-slate-800 text-white rounded-lg text-sm font-bold hover:bg-slate-900 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Plus className="w-4 h-4" />
                             {t('create_invoice')}
@@ -451,11 +571,21 @@ const Billing: React.FC = () => {
                         />
                     </div>
 
+                    <EntityOfficeFilter
+                        entityId={entityFilter}
+                        officeId={officeFilter}
+                        onEntityChange={setEntityFilter}
+                        onOfficeChange={setOfficeFilter}
+                        allowAll
+                    />
+
                     <button
                         onClick={() => {
                             setSearchQuery('');
                             setStatusFilter('all');
                             setDateRange({ from: '', to: '' });
+                            setEntityFilter('');
+                            setOfficeFilter('');
                         }}
                         className="px-3 py-2.5 text-gray-500 hover:text-gray-700 text-sm"
                     >
@@ -611,6 +741,18 @@ const Billing: React.FC = () => {
                                                 ))}
                                             </select>
                                         </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-2">Entity & Office</label>
+                                            <EntityOfficeFilter
+                                                entityId={invoiceEntityId}
+                                                officeId={invoiceOfficeId}
+                                                onEntityChange={(value) => {
+                                                    setInvoiceEntityId(value);
+                                                    setInvoiceOfficeId('');
+                                                }}
+                                                onOfficeChange={setInvoiceOfficeId}
+                                            />
+                                        </div>
 
                                         <div className="grid grid-cols-2 gap-4">
                                             <div>
@@ -731,6 +873,16 @@ const Billing: React.FC = () => {
                                                 <div className="bg-blue-50 p-3 rounded-lg text-xs text-blue-700">
                                                     <strong>{invoicePreview.timeHours.toFixed(1)} hours</strong> of time and <strong>{invoicePreview.expenseCount} expenses</strong> will be marked as billed.
                                                 </div>
+                                                {utbmsIssues.length > 0 && (
+                                                    <div className="bg-red-50 border border-red-200 p-3 rounded-lg text-xs text-red-700">
+                                                        <p className="font-bold mb-2">UTBMS codes are required before invoicing:</p>
+                                                        <ul className="list-disc pl-4 space-y-1">
+                                                            {utbmsIssues.map(issue => (
+                                                                <li key={issue}>{issue}</li>
+                                                            ))}
+                                                        </ul>
+                                                    </div>
+                                                )}
                                             </div>
                                         )}
                                     </div>
@@ -747,7 +899,7 @@ const Billing: React.FC = () => {
                                     <div className="flex flex-col gap-2 flex-1">
                                         <button
                                             type="submit"
-                                            disabled={!invoicePreview || invoicePreview.total <= 0}
+                                            disabled={!invoicePreview || invoicePreview.total <= 0 || utbmsIssues.length > 0}
                                             className="w-full py-2.5 bg-slate-900 text-white rounded-lg font-bold hover:bg-slate-800 shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
                                         >
                                             Generate Invoice
@@ -755,6 +907,11 @@ const Billing: React.FC = () => {
                                         {invoicePreview && invoicePreview.total <= 0 && (
                                             <p className="text-xs text-red-500 text-center">
                                                 * Invoice cannot be created: no billable time or expenses were found for this matter.
+                                            </p>
+                                        )}
+                                        {utbmsIssues.length > 0 && (
+                                            <p className="text-xs text-red-500 text-center">
+                                                * UTBMS codes are required before creating the invoice.
                                             </p>
                                         )}
                                     </div>
@@ -881,6 +1038,15 @@ const Billing: React.FC = () => {
                                 Delete Invoice
                             </button>
                             <div className="flex gap-2">
+                                {billingSettings?.ledesEnabled && (
+                                    <button
+                                        onClick={() => handleExportLedes(selectedInvoice)}
+                                        className="px-4 py-2 bg-slate-100 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-200 flex items-center gap-2"
+                                    >
+                                        <Download className="w-4 h-4" />
+                                        Export LEDES
+                                    </button>
+                                )}
                                 {(selectedInvoice.status === 'DRAFT' || selectedInvoice.status === 'DRAFT') && (
                                     <>
                                         <button

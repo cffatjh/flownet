@@ -17,8 +17,12 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaChallengeId, setMfaChallengeId] = useState('');
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaExpiresAt, setMfaExpiresAt] = useState('');
 
-  const { login, isAuthenticated } = useAuth();
+  const { login, verifyMfa, isAuthenticated } = useAuth();
   const { login: clientLogin, isAuthenticated: isClientAuthenticated } = useClientAuth();
   const { t } = useTranslation();
   // #region agent log
@@ -34,6 +38,10 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
       setEmail('');
       setPassword('');
       setError('');
+      setMfaRequired(false);
+      setMfaChallengeId('');
+      setMfaCode('');
+      setMfaExpiresAt('');
       setLoading(false);
     }
   }, [isAuthenticated, isClientAuthenticated]);
@@ -51,6 +59,10 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
     // #endregion
 
     try {
+      if (mfaRequired && !mfaCode.trim()) {
+        setError('Enter the authentication code');
+        return;
+      }
       if (!email || !password) {
         throw new Error();
       }
@@ -59,13 +71,25 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:44', message: 'Calling attorney login function', data: { email }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
         // #endregion
-        const success = await login(email, password);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:47', message: 'Attorney login result', data: { success }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
-        // #endregion
-        if (!success) {
-          setError(t('error_login'));
+        if (mfaRequired) {
+          const result = await verifyMfa(mfaChallengeId, mfaCode);
+          if (!result.success) {
+            setError(result.error || 'Invalid authentication code');
+          }
+        } else {
+          const result = await login(email, password);
+          if (result.mfaRequired) {
+            setMfaRequired(true);
+            setMfaChallengeId(result.challengeId || '');
+            setMfaExpiresAt(result.challengeExpiresAt || '');
+            setError('');
+          } else if (!result.success) {
+            setError(t('error_login'));
+          }
         }
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'Login.tsx:47', message: 'Attorney login result', data: { mfaRequired }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'F' }) }).catch(() => { });
+        // #endregion
       } else {
         const success = await clientLogin(email, password);
         if (!success) {
@@ -109,68 +133,97 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
           <h2 className="text-xl font-bold text-slate-800 mb-6 text-center">{t('login_title')}</h2>
 
           {/* User Type Selection */}
-          <div className="mb-6 flex gap-2 bg-gray-100 p-1 rounded-xl">
-            <button
-              type="button"
-              onClick={() => {
-                setUserType('attorney');
-                setError('');
-              }}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all ${userType === 'attorney'
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-                }`}
-            >
-              <div className="flex items-center justify-center gap-2">
-                <Scale className="w-4 h-4" />
-                Attorney Login
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setUserType('client');
-                setError('');
-              }}
-              className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all ${userType === 'client'
-                ? 'bg-white text-slate-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-                }`}
-            >
-              <div className="flex items-center justify-center gap-2">
-                <Briefcase className="w-4 h-4" />
-                Client Login
-              </div>
-            </button>
-          </div>
+          {!mfaRequired && (
+            <div className="mb-6 flex gap-2 bg-gray-100 p-1 rounded-xl">
+              <button
+                type="button"
+                onClick={() => {
+                  setUserType('attorney');
+                  setError('');
+                }}
+                className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all ${userType === 'attorney'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+                  }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Scale className="w-4 h-4" />
+                  Attorney Login
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUserType('client');
+                  setError('');
+                }}
+                className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-bold transition-all ${userType === 'client'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+                  }`}
+              >
+                <div className="flex items-center justify-center gap-2">
+                  <Briefcase className="w-4 h-4" />
+                  Client Login
+                </div>
+              </button>
+            </div>
+          )}
 
           <form className="space-y-5" onSubmit={handleSubmit}>
-            <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{t('email')}</label>
-              <input
-                id="email"
-                name="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
-                placeholder="name@firm.com"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{t('password')}</label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
-                placeholder="********"
-              />
-            </div>
+            {!mfaRequired ? (
+              <>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{t('email')}</label>
+                  <input
+                    id="email"
+                    name="email"
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
+                    placeholder="name@firm.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">{t('password')}</label>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
+                    placeholder="********"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5">Authentication Code</label>
+                  <input
+                    id="mfa-code"
+                    name="mfa-code"
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    required
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value)}
+                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:border-transparent outline-none transition-all text-slate-900 font-medium placeholder-gray-400"
+                    placeholder="123456"
+                  />
+                </div>
+                {mfaExpiresAt && (
+                  <p className="text-xs text-gray-500">
+                    Verification expires {new Date(mfaExpiresAt).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                )}
+              </div>
+            )}
 
             {error && (
               <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg flex items-center gap-2 animate-in fade-in">
@@ -179,14 +232,16 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
               </div>
             )}
 
-            <div className="flex justify-end">
-              <a
-                href="/forgot-password"
-                className="text-xs text-gray-500 hover:text-slate-800 transition-colors"
-              >
-                Forgot Password?
-              </a>
-            </div>
+            {!mfaRequired && (
+              <div className="flex justify-end">
+                <a
+                  href="/forgot-password"
+                  className="text-xs text-gray-500 hover:text-slate-800 transition-colors"
+                >
+                  Forgot Password?
+                </a>
+              </div>
+            )}
 
             <button
               type="submit"
@@ -201,7 +256,7 @@ const Login: React.FC<LoginProps> = ({ initialUserType = 'attorney' }) => {
                   </svg>
                   Signing In...
                 </div>
-              ) : t('sign_in')}
+              ) : mfaRequired ? 'Verify Code' : t('sign_in')}
             </button>
           </form>
         </div>

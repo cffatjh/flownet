@@ -11,6 +11,8 @@ namespace JurisFlow.Server.Models
         public string Id { get; set; } = Guid.NewGuid().ToString();
 
         [Required]
+        public string TrustAccountId { get; set; } = string.Empty;
+
         public string? MatterId { get; set; }
 
         [ForeignKey("MatterId")]
@@ -23,6 +25,27 @@ namespace JurisFlow.Server.Models
         public double Amount { get; set; }
         public string Description { get; set; }
         public string? Reference { get; set; }
+        public string? PayorPayee { get; set; }
+        public string? CheckNumber { get; set; }
+
+        public string? LedgerId { get; set; }
+        public string? AllocationsJson { get; set; }
+
+        public string? EntityId { get; set; }
+
+        public string? OfficeId { get; set; }
+
+        public string Status { get; set; } = "PENDING";
+        public string? CreatedBy { get; set; }
+        public string? ApprovedBy { get; set; }
+        public DateTime? ApprovedAt { get; set; }
+        public string? RejectedBy { get; set; }
+        public DateTime? RejectedAt { get; set; }
+        public string? RejectionReason { get; set; }
+
+        public bool IsVoided { get; set; } = false;
+        public DateTime? VoidedAt { get; set; }
+        public string? VoidReason { get; set; }
 
         public bool IsEarned { get; set; } = false;
         public DateTime? EarnedDate { get; set; }

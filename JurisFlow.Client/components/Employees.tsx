@@ -9,6 +9,7 @@ import { Employee, EmployeeRole, EmployeeStatus, BarLicenseStatus, USState } fro
 import { api } from '../services/api';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
+import EntityOfficeFilter from './common/EntityOfficeFilter';
 
 const Employees: React.FC = () => {
     const { t } = useTranslation();
@@ -21,6 +22,8 @@ const Employees: React.FC = () => {
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
     const [searchTerm, setSearchTerm] = useState('');
     const [selfEmployeeId, setSelfEmployeeId] = useState<string | null>(null);
+    const [entityFilter, setEntityFilter] = useState('');
+    const [officeFilter, setOfficeFilter] = useState('');
 
     // Delete Confirmation State
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
@@ -59,7 +62,9 @@ const Employees: React.FC = () => {
         barNumber: '',
         barState: 'NY',
         barAdmissionDate: '',
-        barStatus: 'Active'
+        barStatus: 'Active',
+        entityId: '',
+        officeId: ''
     });
 
     const roleLabels: Record<EmployeeRole, string> = {
@@ -314,7 +319,9 @@ const Employees: React.FC = () => {
             barNumber: '',
             barState: 'NY',
             barAdmissionDate: '',
-            barStatus: 'Active'
+            barStatus: 'Active',
+            entityId: '',
+            officeId: ''
         });
     };
 
@@ -338,7 +345,9 @@ const Employees: React.FC = () => {
             barNumber: emp.barNumber || '',
             barState: emp.barJurisdiction || 'NY',
             barAdmissionDate: emp.barAdmissionDate ? emp.barAdmissionDate.split('T')[0] : '',
-            barStatus: (emp.barStatus as string) || 'Active'
+            barStatus: (emp.barStatus as string) || 'Active',
+            entityId: emp.entityId || '',
+            officeId: emp.officeId || ''
         });
         setShowForm(true);
         setAvatarPreview(emp.user?.avatar || emp.avatar || null);
@@ -349,7 +358,9 @@ const Employees: React.FC = () => {
         const roleMatch = selectedRole === 'all' || e.role === selectedRole;
         const search = searchTerm.trim().toLowerCase();
         const searchMatch = !search || `${e.firstName} ${e.lastName} ${e.email}`.toLowerCase().includes(search) || roleLabels[e.role].toLowerCase().includes(search);
-        return roleMatch && searchMatch;
+        const entityMatch = !entityFilter || e.entityId === entityFilter;
+        const officeMatch = !officeFilter || e.officeId === officeFilter;
+        return roleMatch && searchMatch && entityMatch && officeMatch;
     });
 
     const roleCounts = employees.reduce((acc, e) => {
@@ -401,6 +412,13 @@ const Employees: React.FC = () => {
                                     className="pl-9 pr-3 py-2 bg-white border border-gray-200 rounded-lg text-sm shadow-inner focus:ring-2 focus:ring-blue-200 focus:border-blue-400 min-w-[220px]"
                                 />
                             </div>
+                            <EntityOfficeFilter
+                                entityId={entityFilter}
+                                officeId={officeFilter}
+                                onEntityChange={setEntityFilter}
+                                onOfficeChange={setOfficeFilter}
+                                allowAll
+                            />
                             <div className="flex items-center bg-white border border-gray-200 rounded-lg overflow-hidden shadow-sm">
                                 <button
                                     className={`px-3 py-2 flex items-center gap-1 text-sm ${viewMode === 'grid' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -553,6 +571,15 @@ const Employees: React.FC = () => {
                                             ))}
                                         </select>
                                     </div>
+                                </div>
+                                <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">Entity & Office</label>
+                                    <EntityOfficeFilter
+                                        entityId={formData.entityId}
+                                        officeId={formData.officeId}
+                                        onEntityChange={(value) => setFormData({ ...formData, entityId: value, officeId: '' })}
+                                        onOfficeChange={(value) => setFormData({ ...formData, officeId: value })}
+                                    />
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-4">

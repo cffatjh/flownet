@@ -79,11 +79,17 @@ namespace JurisFlow.Server.Controllers
             client.LastLogin = DateTime.UtcNow;
             await _context.SaveChangesAsync();
 
-            var token = GenerateClientJwtToken(client);
+            var session = await CreateSessionAsync(client.Id, "Client");
+            var token = GenerateClientJwtToken(client, session.Id, session.ExpiresAt);
 
             var response = new
             {
                 token,
+                session = new
+                {
+                    id = session.Id,
+                    expiresAt = session.ExpiresAt
+                },
                 client = new
                 {
                     id = client.Id,
@@ -102,7 +108,26 @@ namespace JurisFlow.Server.Controllers
             return Ok(response);
         }
 
-        private string GenerateClientJwtToken(Client client)
+        private async Task<AuthSession> CreateSessionAsync(string clientId, string subjectType)
+        {
+            var sessionMinutes = _configuration.GetValue("Security:SessionTimeoutMinutes", 480);
+            var session = new AuthSession
+            {
+                ClientId = clientId,
+                SubjectType = subjectType,
+                CreatedAt = DateTime.UtcNow,
+                LastSeenAt = DateTime.UtcNow,
+                ExpiresAt = DateTime.UtcNow.AddMinutes(sessionMinutes),
+                IpAddress = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                UserAgent = HttpContext.Request.Headers.UserAgent.ToString()
+            };
+
+            _context.AuthSessions.Add(session);
+            await _context.SaveChangesAsync();
+            return session;
+        }
+
+        private string GenerateClientJwtToken(Client client, string sessionId, DateTime expiresAt)
         {
             var jwtKey = _configuration["Jwt:Key"];
             var jwtIssuer = _configuration["Jwt:Issuer"];
@@ -119,17 +144,19 @@ namespace JurisFlow.Server.Controllers
             var claims = new[]
             {
                 new Claim(JwtRegisteredClaimNames.Sub, client.Id),
+                new Claim(ClaimTypes.NameIdentifier, client.Id),
                 new Claim(JwtRegisteredClaimNames.Email, client.Email),
                 new Claim(ClaimTypes.Role, "Client"),
                 new Claim("role", "Client"),
-                new Claim("clientId", client.Id)
+                new Claim("clientId", client.Id),
+                new Claim("sid", sessionId)
             };
 
             var token = new JwtSecurityToken(
                 issuer: jwtIssuer,
                 audience: jwtAudience,
                 claims: claims,
-                expires: DateTime.Now.AddDays(7),
+                expires: expiresAt,
                 signingCredentials: credentials);
 
             return new JwtSecurityTokenHandler().WriteToken(token);

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Users, Plus, Edit, Trash2, X, Save, Shield, User as UserIcon, AlertCircle } from './Icons';
+import { Users, Plus, Edit, Trash2, X, Save, Shield, User as UserIcon, AlertCircle, RefreshCw } from './Icons';
 import { api } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { useConfirm } from './ConfirmDialog';
@@ -41,12 +41,22 @@ interface Client {
   notes?: string;
 }
 
+interface RetentionPolicy {
+  id: string;
+  entityName: string;
+  retentionDays: number;
+  isActive: boolean;
+  lastAppliedAt?: string;
+}
+
 const AdminPanel: React.FC = () => {
   const { user } = useAuth();
   const { confirm } = useConfirm();
-  const [activeSection, setActiveSection] = useState<'users' | 'clients' | 'audit'>('users');
+  const [activeSection, setActiveSection] = useState<'users' | 'clients' | 'audit' | 'retention'>('users');
   const [users, setUsers] = useState<User[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [retentionPolicies, setRetentionPolicies] = useState<RetentionPolicy[]>([]);
+  const [retentionLoading, setRetentionLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [accessDenied, setAccessDenied] = useState(false);
   const [showUserModal, setShowUserModal] = useState(false);
@@ -98,6 +108,12 @@ const AdminPanel: React.FC = () => {
     loadClients();
   }, [user]);
 
+  useEffect(() => {
+    if (activeSection === 'retention') {
+      loadRetention();
+    }
+  }, [activeSection]);
+
   const loadUsers = async () => {
     try {
       setLoading(true);
@@ -141,6 +157,57 @@ const AdminPanel: React.FC = () => {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadRetention = async () => {
+    try {
+      setRetentionLoading(true);
+      const data = await api.admin.getRetentionPolicies();
+      setRetentionPolicies(Array.isArray(data) ? data : []);
+    } catch (error: any) {
+      console.error('Error loading retention policies:', error);
+      const { toast } = await import('./Toast');
+      toast.error('Failed to load retention policies');
+    } finally {
+      setRetentionLoading(false);
+    }
+  };
+
+  const handleSaveRetention = async () => {
+    try {
+      setRetentionLoading(true);
+      const payload = retentionPolicies.map(p => ({
+        entityName: p.entityName,
+        retentionDays: p.retentionDays,
+        isActive: p.isActive
+      }));
+      await api.admin.updateRetentionPolicies(payload);
+      await loadRetention();
+      const { toast } = await import('./Toast');
+      toast.success('Retention policies updated');
+    } catch (error: any) {
+      console.error('Retention save failed:', error);
+      const { toast } = await import('./Toast');
+      toast.error('Failed to update retention policies');
+    } finally {
+      setRetentionLoading(false);
+    }
+  };
+
+  const handleRunRetention = async () => {
+    try {
+      setRetentionLoading(true);
+      await api.admin.runRetention();
+      await loadRetention();
+      const { toast } = await import('./Toast');
+      toast.success('Retention cleanup executed');
+    } catch (error: any) {
+      console.error('Retention run failed:', error);
+      const { toast } = await import('./Toast');
+      toast.error('Retention cleanup failed');
+    } finally {
+      setRetentionLoading(false);
     }
   };
 
@@ -381,6 +448,16 @@ const AdminPanel: React.FC = () => {
             <Shield className="w-4 h-4 inline mr-2" />
             Logs
           </button>
+          <button
+            onClick={() => setActiveSection('retention')}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${activeSection === 'retention'
+              ? 'bg-slate-800 text-white'
+              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+              }`}
+          >
+            <Save className="w-4 h-4 inline mr-2" />
+            Retention
+          </button>
         </div>
       </div>
 
@@ -543,6 +620,84 @@ const AdminPanel: React.FC = () => {
         {activeSection === 'audit' && (
           <div>
             <AdminAuditLogs />
+          </div>
+        )}
+
+        {activeSection === 'retention' && (
+          <div>
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">Retention Policies</h2>
+                <p className="text-sm text-gray-500">Control data retention windows for compliance.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleRunRetention}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200"
+                  disabled={retentionLoading}
+                >
+                  <RefreshCw className={`w-4 h-4 ${retentionLoading ? 'animate-spin' : ''}`} />
+                  Run Cleanup
+                </button>
+                <button
+                  onClick={handleSaveRetention}
+                  className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900"
+                  disabled={retentionLoading}
+                >
+                  <Save className="w-4 h-4" />
+                  Save Changes
+                </button>
+              </div>
+            </div>
+
+            {retentionLoading ? (
+              <div className="text-center py-8 text-gray-500">Loading...</div>
+            ) : (
+              <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Entity</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Retention (days)</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Active</th>
+                      <th className="px-4 py-3 text-left text-sm font-semibold text-gray-700">Last Applied</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {retentionPolicies.map(policy => (
+                      <tr key={policy.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm text-gray-900">{policy.entityName}</td>
+                        <td className="px-4 py-3">
+                          <input
+                            type="number"
+                            min={1}
+                            value={policy.retentionDays}
+                            onChange={(e) => {
+                              const value = parseInt(e.target.value || '0', 10);
+                              setRetentionPolicies(prev => prev.map(p => p.id === policy.id ? { ...p, retentionDays: value } : p));
+                            }}
+                            className="w-32 border border-gray-300 rounded-lg p-2 text-sm"
+                          />
+                        </td>
+                        <td className="px-4 py-3">
+                          <button
+                            onClick={() => {
+                              setRetentionPolicies(prev => prev.map(p => p.id === policy.id ? { ...p, isActive: !p.isActive } : p));
+                            }}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${policy.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+                          >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${policy.isActive ? 'translate-x-6' : 'translate-x-1'}`} />
+                          </button>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {policy.lastAppliedAt ? new Date(policy.lastAppliedAt).toLocaleString('en-US') : 'Never'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>

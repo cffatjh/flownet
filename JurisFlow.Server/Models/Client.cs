@@ -54,6 +54,9 @@ namespace JurisFlow.Server.Models
         // Navigation Properties
         [JsonIgnore]
         public ICollection<Matter> Matters { get; set; } = new List<Matter>();
+
+        [JsonIgnore]
+        public ICollection<ClientStatusHistory> StatusHistory { get; set; } = new List<ClientStatusHistory>();
         
         // Add other collections as Models are created: Invoices, etc.
     }

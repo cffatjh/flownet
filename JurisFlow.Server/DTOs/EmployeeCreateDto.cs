@@ -38,6 +38,9 @@ namespace JurisFlow.Server.DTOs
         public string? EmergencyContact { get; set; }
         public string? EmergencyPhone { get; set; }
 
+        public string? EntityId { get; set; }
+        public string? OfficeId { get; set; }
+
         public BarLicenseDto? BarLicense { get; set; }
     }
 

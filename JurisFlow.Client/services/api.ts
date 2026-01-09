@@ -1,4 +1,4 @@
-import { Matter, Task, TimeEntry, Lead, CalendarEvent, Invoice, TaskStatus, Expense, Employee } from "../types";
+import { Matter, Task, TimeEntry, Lead, CalendarEvent, Invoice, TaskStatus, Expense, Employee, IntegrationItem, FirmEntity, Office } from "../types";
 
 // Use relative path when in browser (proxy will handle it), fallback to full URL for SSR
 const API_URL = typeof window !== 'undefined' ? '/api' : 'http://localhost:3001/api';
@@ -24,6 +24,9 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}) => {
         // #region agent log
         fetch('http://127.0.0.1:7242/ingest/468b8283-de18-4f31-b7cb-52da7f0bb927', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'api.ts:18', message: 'API 401 Unauthorized', data: { endpoint }, timestamp: Date.now(), sessionId: 'debug-session', runId: 'run1', hypothesisId: 'A' }) }).catch(() => { });
         // #endregion
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('auth:unauthorized', { detail: { endpoint } }));
+        }
         return null;
     }
     if (!res.ok) {
@@ -42,12 +45,93 @@ const fetchJson = async (endpoint: string, options: RequestInit = {}) => {
     return res.json();
 };
 
+const fetchFile = async (endpoint: string) => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const res = await fetch(`${API_URL}${endpoint}`, {
+        headers: {
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+    });
+    if (res.status === 401) {
+        if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('auth:unauthorized', { detail: { endpoint } }));
+        }
+        return null;
+    }
+    if (!res.ok) {
+        throw new Error(`API Error: ${res.statusText}`);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('content-disposition') || '';
+    const match = /filename="?([^"]+)"?/i.exec(disposition);
+    const filename = match ? match[1] : undefined;
+    return { blob, filename };
+};
+
 export const api = {
+    get: (endpoint: string) => {
+        const normalized = endpoint.startsWith('/api/') ? endpoint.replace('/api', '') : endpoint;
+        return fetchJson(normalized);
+    },
+    post: (endpoint: string, data: any) => {
+        const normalized = endpoint.startsWith('/api/') ? endpoint.replace('/api', '') : endpoint;
+        return fetchJson(normalized, { method: 'POST', body: JSON.stringify(data) });
+    },
     // Auth
     login: (data: { email: string; password: string }) => fetchJson('/login', { method: 'POST', body: JSON.stringify(data) }),
+    mfa: {
+        status: () => fetchJson('/mfa/status'),
+        setup: () => fetchJson('/mfa/setup', { method: 'POST' }),
+        enable: (code: string) => fetchJson('/mfa/enable', { method: 'POST', body: JSON.stringify({ code }) }),
+        disable: (code: string) => fetchJson('/mfa/disable', { method: 'POST', body: JSON.stringify({ code }) }),
+        verify: (challengeId: string, code: string) =>
+            fetchJson('/mfa/verify', { method: 'POST', body: JSON.stringify({ challengeId, code }) })
+    },
+    security: {
+        getConfig: () => fetchJson('/security/config'),
+        getSessions: () => fetchJson('/security/sessions'),
+        revokeSession: (id: string) => fetchJson(`/security/sessions/${id}/revoke`, { method: 'POST' }),
+        revokeCurrentSession: () => fetchJson('/security/sessions/revoke-current', { method: 'POST' })
+    },
+    settings: {
+        getBilling: () => fetchJson('/settings/billing'),
+        updateBilling: (data: any) => fetchJson('/settings/billing', { method: 'PUT', body: JSON.stringify(data) }),
+        getFirm: () => fetchJson('/settings/firm'),
+        updateFirm: (data: any) => fetchJson('/settings/firm', { method: 'PUT', body: JSON.stringify(data) }),
+        getIntegrations: () => fetchJson('/settings/integrations'),
+        updateIntegrations: (items: IntegrationItem[]) =>
+            fetchJson('/settings/integrations', { method: 'PUT', body: JSON.stringify({ items }) })
+    },
+
+    // Firm Entities & Offices
+    entities: {
+        list: () => fetchJson('/entities'),
+        create: (data: Partial<FirmEntity>) => fetchJson('/entities', { method: 'POST', body: JSON.stringify(data) }),
+        update: (id: string, data: Partial<FirmEntity>) => fetchJson(`/entities/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+        remove: (id: string) => fetchJson(`/entities/${id}`, { method: 'DELETE' }),
+        setDefault: (id: string) => fetchJson(`/entities/${id}/default`, { method: 'POST' }),
+        offices: {
+            list: (entityId: string) => fetchJson(`/entities/${entityId}/offices`),
+            create: (entityId: string, data: Partial<Office>) =>
+                fetchJson(`/entities/${entityId}/offices`, { method: 'POST', body: JSON.stringify(data) }),
+            update: (entityId: string, officeId: string, data: Partial<Office>) =>
+                fetchJson(`/entities/${entityId}/offices/${officeId}`, { method: 'PUT', body: JSON.stringify(data) }),
+            remove: (entityId: string, officeId: string) =>
+                fetchJson(`/entities/${entityId}/offices/${officeId}`, { method: 'DELETE' }),
+            setDefault: (entityId: string, officeId: string) =>
+                fetchJson(`/entities/${entityId}/offices/${officeId}/default`, { method: 'POST' })
+        }
+    },
 
     // Matters
-    getMatters: () => fetchJson('/matters'),
+    getMatters: (params?: { status?: string; entityId?: string; officeId?: string }) => {
+        const qs = new URLSearchParams();
+        if (params?.status) qs.set('status', params.status);
+        if (params?.entityId) qs.set('entityId', params.entityId);
+        if (params?.officeId) qs.set('officeId', params.officeId);
+        const query = qs.toString() ? `?${qs.toString()}` : '';
+        return fetchJson(`/matters${query}`);
+    },
     createMatter: (data: Partial<Matter>) => fetchJson('/matters', { method: 'POST', body: JSON.stringify(data) }),
     updateMatter: (id: string, data: Partial<Matter>) => fetchJson(`/matters/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteMatter: (id: string) => fetchJson(`/matters/${id}`, { method: 'DELETE' }),
@@ -67,12 +151,19 @@ export const api = {
     // Time & Expenses
     getTimeEntries: () => fetchJson('/time-entries'),
     createTimeEntry: (data: Partial<TimeEntry>) => fetchJson('/time-entries', { method: 'POST', body: JSON.stringify(data) }),
+    approveTimeEntry: (id: string) => fetchJson(`/time-entries/${id}/approve`, { method: 'POST' }),
+    rejectTimeEntry: (id: string, reason?: string) =>
+        fetchJson(`/time-entries/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
     getExpenses: () => fetchJson('/expenses'),
     createExpense: (data: Partial<Expense>) => fetchJson('/expenses', { method: 'POST', body: JSON.stringify(data) }),
+    approveExpense: (id: string) => fetchJson(`/expenses/${id}/approve`, { method: 'POST' }),
+    rejectExpense: (id: string, reason?: string) =>
+        fetchJson(`/expenses/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) }),
     markAsBilled: (matterId: string) => fetchJson('/billing/mark-billed', { method: 'POST', body: JSON.stringify({ matterId }) }),
 
     // CRM
     getClients: () => fetchJson('/clients'),
+    getClientStatusHistory: (id: string) => fetchJson(`/clients/${id}/status-history`),
     createClient: (data: any) => fetchJson('/clients', { method: 'POST', body: JSON.stringify(data) }),
     setClientPassword: (id: string, password: string) =>
         fetchJson(`/clients/${id}/set-password`, { method: 'POST', body: JSON.stringify({ password }) }),
@@ -91,10 +182,17 @@ export const api = {
     // Calendar
     getEvents: () => fetchJson('/events'),
     createEvent: (data: Partial<CalendarEvent>) => fetchJson('/events', { method: 'POST', body: JSON.stringify(data) }),
+    updateEvent: (id: string, data: Partial<CalendarEvent>) => fetchJson(`/events/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteEvent: (id: string) => fetchJson(`/events/${id}`, { method: 'DELETE' }),
 
     // Invoices
-    getInvoices: () => fetchJson('/invoices'),
+    getInvoices: (params?: { entityId?: string; officeId?: string }) => {
+        const qs = new URLSearchParams();
+        if (params?.entityId) qs.set('entityId', params.entityId);
+        if (params?.officeId) qs.set('officeId', params.officeId);
+        const query = qs.toString() ? `?${qs.toString()}` : '';
+        return fetchJson(`/invoices${query}`);
+    },
     getInvoice: (id: string) => fetchJson(`/invoices/${id}`),
     createInvoice: (data: any) => {
         const payload = { ...data, clientId: data.client?.id || data.clientId };
@@ -102,6 +200,7 @@ export const api = {
     },
     updateInvoice: (id: string, data: any) => fetchJson(`/invoices/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     deleteInvoice: (id: string) => fetchJson(`/invoices/${id}`, { method: 'DELETE' }),
+    exportInvoiceLedes: (id: string) => fetchFile(`/invoices/${id}/ledes`),
 
     // Invoice Workflow
     approveInvoice: (id: string) => fetchJson(`/invoices/${id}/approve`, { method: 'POST' }),
@@ -169,7 +268,11 @@ export const api = {
             });
             const query = qs.toString() ? `?${qs.toString()}` : '';
             return fetchJson(`/admin/audit-logs${query}`);
-        }
+        },
+        // Admin: Retention
+        getRetentionPolicies: () => fetchJson('/admin/retention'),
+        updateRetentionPolicies: (data: any) => fetchJson('/admin/retention', { method: 'PUT', body: JSON.stringify(data) }),
+        runRetention: () => fetchJson('/admin/retention/run', { method: 'POST' })
     },
 
     // Documents
@@ -205,10 +308,30 @@ export const api = {
         return fetchJson(`/documents/search?${qs.toString()}`);
     },
     deleteDocument: (id: string) => fetchJson(`/documents/${id}`, { method: 'DELETE' }),
-    updateDocument: (id: string, data: { matterId?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null }) =>
+    updateDocument: (id: string, data: { matterId?: string | null; description?: string | null; tags?: string[] | string | null; category?: string | null; status?: string | null; legalHoldReason?: string | null }) =>
         fetchJson(`/documents/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     bulkAssignDocuments: (data: { ids: string[]; matterId?: string | null }) =>
         fetchJson('/documents/bulk-assign', { method: 'PUT', body: JSON.stringify(data) }),
+    getDocumentVersions: (documentId: string) => fetchJson(`/documents/${documentId}/versions`),
+    downloadDocumentVersion: (versionId: string) => fetchFile(`/documents/versions/${versionId}/download`),
+    restoreDocumentVersion: (versionId: string) => fetchJson(`/documents/versions/${versionId}/restore`, { method: 'POST' }),
+    diffDocumentVersions: (leftVersionId: string, rightVersionId: string) =>
+        fetchJson(`/documents/versions/diff?leftVersionId=${encodeURIComponent(leftVersionId)}&rightVersionId=${encodeURIComponent(rightVersionId)}`),
+    uploadDocumentVersion: async (documentId: string, file: File) => {
+        const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`${API_URL}/documents/${documentId}/versions`, {
+            method: 'POST',
+            headers: {
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            body: formData
+        });
+        if (res.status === 401) return null;
+        if (!res.ok) throw new Error(`API Error: ${res.statusText}`);
+        return res.json();
+    },
 
     // Password Reset
     forgotPassword: (email: string, userType: 'attorney' | 'client') =>
@@ -233,8 +356,9 @@ export const api = {
 
     // Appointments (Attorney)
     getAppointments: () => fetchJson('/appointments'),
-    updateAppointment: (id: string, data: { status: string; approvedDate?: string; assignedTo?: string }) =>
+    updateAppointment: (id: string, data: { status: string; approvedDate?: string; assignedTo?: string; duration?: number }) =>
         fetchJson(`/appointments/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    notifyAppointment: (id: string) => fetchJson(`/appointments/${id}/notify`, { method: 'POST' }),
 
     // Intake Forms
     getIntakeForms: () => fetchJson('/intake-forms'),
@@ -255,7 +379,13 @@ export const api = {
     getDocumentSignatures: (documentId: string) => fetchJson(`/documents/${documentId}/signatures`),
 
     // Employees
-    getEmployees: () => fetchJson('/employees'),
+    getEmployees: (params?: { entityId?: string; officeId?: string }) => {
+        const qs = new URLSearchParams();
+        if (params?.entityId) qs.set('entityId', params.entityId);
+        if (params?.officeId) qs.set('officeId', params.officeId);
+        const query = qs.toString() ? `?${qs.toString()}` : '';
+        return fetchJson(`/employees${query}`);
+    },
     getEmployee: (id: string) => fetchJson(`/employees/${id}`),
     createEmployee: (data: Partial<Employee>) => fetchJson('/employees', { method: 'POST', body: JSON.stringify(data) }),
     updateEmployee: (id: string, data: Partial<Employee>) => fetchJson(`/employees/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
@@ -316,6 +446,23 @@ export const api = {
         stats: (from?: string, to?: string) => fetchJson(`/payments/stats${from || to ? `?from=${from || ''}&to=${to || ''}` : ''}`),
     },
 
+    // Payment Plans
+    paymentPlans: {
+        list: (params?: { clientId?: string; invoiceId?: string; status?: string }) => {
+            const qs = new URLSearchParams();
+            if (params?.clientId) qs.set('clientId', params.clientId);
+            if (params?.invoiceId) qs.set('invoiceId', params.invoiceId);
+            if (params?.status) qs.set('status', params.status);
+            const query = qs.toString() ? `?${qs.toString()}` : '';
+            return fetchJson(`/payment-plans${query}`);
+        },
+        create: (data: any) => fetchJson('/payment-plans', { method: 'POST', body: JSON.stringify(data) }),
+        update: (id: string, data: any) => fetchJson(`/payment-plans/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+        run: (id: string) => fetchJson(`/payment-plans/${id}/run`, { method: 'POST' }),
+        runDue: (limit?: number) =>
+            fetchJson(`/payment-plans/run-due${limit ? `?limit=${limit}` : ''}`, { method: 'POST' })
+    },
+
     // Deadlines
     deadlines: {
         list: (params?: { matterId?: string; status?: string; days?: number }) => {
@@ -326,9 +473,9 @@ export const api = {
             return fetchJson(`/deadlines?${query.toString()}`);
         },
         get: (id: string) => fetchJson(`/deadlines/${id}`),
-        create: (data: { matterId: string; title: string; dueDate: string; description?: string; priority?: string; deadlineType?: string; assignedTo?: string }) =>
+        create: (data: { matterId: string; title: string; dueDate: string; description?: string; priority?: string; deadlineType?: string; assignedTo?: string; reminderDays?: number }) =>
             fetchJson('/deadlines', { method: 'POST', body: JSON.stringify(data) }),
-        update: (id: string, data: { title?: string; description?: string; dueDate?: string; status?: string; priority?: string }) =>
+        update: (id: string, data: { title?: string; description?: string; dueDate?: string; status?: string; priority?: string; assignedTo?: string; reminderDays?: number }) =>
             fetchJson(`/deadlines/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
         complete: (id: string) => fetchJson(`/deadlines/${id}/complete`, { method: 'POST' }),
         delete: (id: string) => fetchJson(`/deadlines/${id}`, { method: 'DELETE' }),

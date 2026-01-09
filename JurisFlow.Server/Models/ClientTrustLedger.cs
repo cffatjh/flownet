@@ -32,6 +32,10 @@ namespace JurisFlow.Server.Models
         [JsonIgnore]
         public TrustBankAccount? TrustAccount { get; set; }
 
+        public string? EntityId { get; set; }
+
+        public string? OfficeId { get; set; }
+
         public double RunningBalance { get; set; } = 0;
         public LedgerStatus Status { get; set; } = LedgerStatus.ACTIVE;
         public string? Notes { get; set; }

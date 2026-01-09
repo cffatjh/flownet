@@ -42,6 +42,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
     { id: 'nav_calendar', label: 'Go to Calendar', icon: Calendar, kind: 'nav', tab: 'calendar', hint: 'Jump To' },
     { id: 'nav_docs', label: 'Go to Documents', icon: FileText, kind: 'nav', tab: 'documents', hint: 'Jump To' },
     { id: 'nav_crm', label: 'Go to CRM', icon: Users, kind: 'nav', tab: 'crm', hint: 'Jump To' },
+    { id: 'nav_intake', label: 'Go to Intake', icon: FileText, kind: 'nav', tab: 'intake', hint: 'Jump To' },
   ];
 
   const q = query.trim().toLowerCase();
@@ -53,7 +54,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
         .slice(0, 6)
         .map(m => ({
           id: `matter-${m.id}`,
-          label: `${m.caseNumber} • ${m.name}`,
+          label: `${m.caseNumber} - ${m.name}`,
           icon: Briefcase,
           kind: 'matter',
           tab: 'matters',
@@ -103,7 +104,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
           kind: 'task',
           tab: 'tasks',
           taskId: tsk.id,
-          hint: `${tsk.status}${tsk.dueDate ? ` • Due ${new Date(tsk.dueDate).toLocaleDateString()}` : ''}`
+          hint: `${tsk.status}${tsk.dueDate ? ` - Due ${new Date(tsk.dueDate).toLocaleDateString()}` : ''}`
         }));
 
   const matchedActions: PaletteItem[] = actions.filter(a => !q || a.label.toLowerCase().includes(q));
@@ -230,3 +231,5 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose, onNavi
 };
 
 export default CommandPalette;
+
+

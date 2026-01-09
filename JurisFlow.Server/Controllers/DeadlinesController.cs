@@ -1,19 +1,25 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using JurisFlow.Server.Data;
 using JurisFlow.Server.Models;
+using JurisFlow.Server.Services;
 
 namespace JurisFlow.Server.Controllers
 {
     [Route("api/[controller]")]
     [ApiController]
+    [Authorize]
     public class DeadlinesController : ControllerBase
     {
         private readonly JurisFlowDbContext _context;
+        private readonly DeadlineReminderService _deadlineReminderService;
 
-        public DeadlinesController(JurisFlowDbContext context)
+        public DeadlinesController(JurisFlowDbContext context, DeadlineReminderService deadlineReminderService)
         {
             _context = context;
+            _deadlineReminderService = deadlineReminderService;
         }
 
         // GET: api/deadlines
@@ -63,6 +69,7 @@ namespace JurisFlow.Server.Controllers
         [HttpPost]
         public async Task<ActionResult<Deadline>> CreateDeadline([FromBody] CreateDeadlineDto dto)
         {
+            var userId = GetUserId();
             var deadline = new Deadline
             {
                 MatterId = dto.MatterId,
@@ -74,7 +81,7 @@ namespace JurisFlow.Server.Controllers
                 Priority = dto.Priority ?? "Medium",
                 DeadlineType = dto.DeadlineType ?? "Filing",
                 ReminderDays = dto.ReminderDays ?? 3,
-                AssignedTo = dto.AssignedTo,
+                AssignedTo = string.IsNullOrWhiteSpace(dto.AssignedTo) ? userId : dto.AssignedTo,
                 Notes = dto.Notes
             };
 
@@ -94,9 +101,16 @@ namespace JurisFlow.Server.Controllers
                 return NotFound(new { message = "Court rule not found" });
             }
 
-            var triggerDate = dto.TriggerDate ?? DateTime.UtcNow.Date;
+            var triggerDate = (dto.TriggerDate ?? DateTime.UtcNow.Date).Date;
             var holidays = await LoadHolidays(rule.Jurisdiction);
+            var serviceDaysAdded = GetServiceDaysAdd(rule, dto.ServiceMethod);
             var calculatedDate = CalculateDeadlineDate(triggerDate, rule, dto.ServiceMethod, holidays);
+
+            var description = $"{rule.DaysCount} {rule.DayType.ToLowerInvariant()} days {rule.Direction.ToLowerInvariant()} {rule.TriggerEvent}";
+            if (serviceDaysAdded > 0)
+            {
+                description += $" (+{serviceDaysAdded} service days)";
+            }
 
             return Ok(new CalculatedDeadlineDto
             {
@@ -105,8 +119,8 @@ namespace JurisFlow.Server.Controllers
                 RuleName = rule.Name,
                 RuleCitation = rule.Citation,
                 DaysCount = rule.DaysCount,
-                ServiceDaysAdded = rule.ServiceDaysAdd,
-                Description = $"{rule.DaysCount} {rule.DayType.ToLower()} days {rule.Direction.ToLower()} {rule.TriggerEvent}"
+                ServiceDaysAdded = serviceDaysAdded,
+                Description = description
             });
         }
 
@@ -122,12 +136,24 @@ namespace JurisFlow.Server.Controllers
 
             if (dto.Title != null) deadline.Title = dto.Title;
             if (dto.Description != null) deadline.Description = dto.Description;
-            if (dto.DueDate.HasValue) deadline.DueDate = dto.DueDate.Value;
+            if (dto.DueDate.HasValue && dto.DueDate.Value != deadline.DueDate)
+            {
+                deadline.DueDate = dto.DueDate.Value;
+                deadline.ReminderSent = false;
+                if (deadline.Status == "Missed")
+                {
+                    deadline.Status = "Pending";
+                }
+            }
             if (dto.Status != null) deadline.Status = dto.Status;
             if (dto.Priority != null) deadline.Priority = dto.Priority;
             if (dto.AssignedTo != null) deadline.AssignedTo = dto.AssignedTo;
             if (dto.Notes != null) deadline.Notes = dto.Notes;
-            if (dto.ReminderDays.HasValue) deadline.ReminderDays = dto.ReminderDays.Value;
+            if (dto.ReminderDays.HasValue && dto.ReminderDays.Value != deadline.ReminderDays)
+            {
+                deadline.ReminderDays = dto.ReminderDays.Value;
+                deadline.ReminderSent = false;
+            }
 
             deadline.UpdatedAt = DateTime.UtcNow;
 
@@ -199,6 +225,14 @@ namespace JurisFlow.Server.Controllers
             });
         }
 
+        // POST: api/deadlines/reminders/run
+        [HttpPost("reminders/run")]
+        public async Task<IActionResult> RunReminders()
+        {
+            var result = await _deadlineReminderService.ProcessAsync();
+            return Ok(result);
+        }
+
         // Helper method for deadline calculation
         private async Task<List<DateTime>> LoadHolidays(string? jurisdiction)
         {
@@ -213,17 +247,12 @@ namespace JurisFlow.Server.Controllers
 
         private DateTime CalculateDeadlineDate(DateTime triggerDate, CourtRule rule, string? serviceMethod, List<DateTime> holidays)
         {
-            var days = rule.DaysCount;
-
-            // Add service days if applicable
-            if (!string.IsNullOrEmpty(serviceMethod) && serviceMethod != "Personal")
-            {
-                days += rule.ServiceDaysAdd;
-            }
+            var days = rule.DaysCount + GetServiceDaysAdd(rule, serviceMethod);
 
             DateTime result;
 
-            if (rule.Direction == "Before")
+            var isBefore = string.Equals(rule.Direction, "Before", StringComparison.OrdinalIgnoreCase);
+            if (isBefore)
             {
                 result = triggerDate.AddDays(-days);
             }
@@ -233,9 +262,9 @@ namespace JurisFlow.Server.Controllers
             }
 
             // If court days, skip weekends
-            if (rule.DayType == "Court")
+            if (string.Equals(rule.DayType, "Court", StringComparison.OrdinalIgnoreCase))
             {
-                result = AdjustForCourtDays(triggerDate, days, rule.Direction == "Before", holidays);
+                result = AdjustForCourtDays(triggerDate, days, isBefore, holidays);
             }
 
             // Extend if falls on weekend/holiday
@@ -279,6 +308,30 @@ namespace JurisFlow.Server.Controllers
                 date = date.AddDays(1);
             }
             return date;
+        }
+
+        private int GetServiceDaysAdd(CourtRule rule, string? serviceMethod)
+        {
+            if (string.IsNullOrWhiteSpace(serviceMethod))
+            {
+                return 0;
+            }
+
+            var normalized = serviceMethod.Trim().ToLowerInvariant();
+            return normalized switch
+            {
+                "mail" => rule.ServiceDaysAdd,
+                "electronic" => 2,
+                "e-service" => 2,
+                "eservice" => 2,
+                "personal" => 0,
+                _ => 0
+            };
+        }
+
+        private string? GetUserId()
+        {
+            return User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value;
         }
     }
 

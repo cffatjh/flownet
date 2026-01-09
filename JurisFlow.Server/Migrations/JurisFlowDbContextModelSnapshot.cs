@@ -111,6 +111,49 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("AuditLogs");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.AuthSession", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RevokedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RevokedReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubjectType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "ClientId", "ExpiresAt");
+
+                    b.ToTable("AuthSessions");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.BillingLock", b =>
                 {
                     b.Property<string>("Id")
@@ -138,6 +181,66 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("PeriodStart", "PeriodEnd");
 
                     b.ToTable("BillingLocks");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.BillingSettings", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("AssociateRate")
+                        .HasColumnType("REAL");
+
+                    b.Property<int>("BillingIncrement")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("DefaultHourlyRate")
+                        .HasColumnType("REAL");
+
+                    b.Property<int>("DefaultPaymentTerms")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("DefaultTaxRate")
+                        .HasColumnType("REAL");
+
+                    b.Property<double>("EvergreenRetainerMinimum")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("InvoicePrefix")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("LedesEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("MinimumTimeEntry")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("ParalegalRate")
+                        .HasColumnType("REAL");
+
+                    b.Property<double>("PartnerRate")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("RoundingRule")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("TrustBalanceAlerts")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("UtbmsCodesRequired")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Id")
+                        .IsUnique();
+
+                    b.ToTable("BillingSettings");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.CalendarEvent", b =>
@@ -375,6 +478,42 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("ClientMessages");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.ClientStatusHistory", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangedByName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangedByUserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NewStatus")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PreviousStatus")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientId", "CreatedAt");
+
+                    b.ToTable("ClientStatusHistories");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.ClientTrustLedger", b =>
                 {
                     b.Property<string>("Id")
@@ -387,10 +526,16 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("MatterId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
                     b.Property<double>("RunningBalance")
@@ -413,6 +558,8 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("MatterId");
 
                     b.HasIndex("TrustAccountId");
+
+                    b.HasIndex("EntityId", "OfficeId");
 
                     b.ToTable("ClientTrustLedgers");
                 });
@@ -725,6 +872,21 @@ namespace JurisFlow.Server.Migrations
                     b.Property<long>("FileSize")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("LegalHoldPlacedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LegalHoldPlacedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LegalHoldReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LegalHoldReleasedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LegalHoldReleasedBy")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("MatterId")
                         .HasColumnType("TEXT");
 
@@ -734,6 +896,9 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Tags")
@@ -753,6 +918,51 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("MatterId");
 
                     b.ToTable("Documents");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.DocumentContentIndex", b =>
+                {
+                    b.Property<string>("DocumentId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Content")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ContentHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ContentLength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("IndexedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedContent")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("DocumentId");
+
+                    b.HasIndex("ContentHash");
+
+                    b.ToTable("DocumentContentIndexes");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.DocumentContentToken", b =>
+                {
+                    b.Property<string>("DocumentId")
+                        .HasColumnType("TEXT")
+                        .HasColumnOrder(0);
+
+                    b.Property<string>("Token")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT")
+                        .HasColumnOrder(1);
+
+                    b.HasKey("DocumentId", "Token");
+
+                    b.HasIndex("Token");
+
+                    b.ToTable("DocumentContentTokens");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.DocumentVersion", b =>
@@ -962,6 +1172,9 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("EmergencyPhone")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("FirstName")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -980,6 +1193,9 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Phone")
@@ -1008,9 +1224,190 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
+                    b.HasIndex("OfficeId");
+
                     b.HasIndex("UserId");
 
+                    b.HasIndex("EntityId", "OfficeId");
+
                     b.ToTable("Employees");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.Expense", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("Amount")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("ApprovalStatus")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Billed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExpenseCode")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MatterId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SubmittedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmittedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatterId", "Date");
+
+                    b.ToTable("Expenses");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.FirmEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Address")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("City")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Country")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LegalName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaxId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Website")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ZipCode")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsDefault");
+
+                    b.HasIndex("Name");
+
+                    b.ToTable("FirmEntities");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.FirmSettings", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Address")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("City")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FirmName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IntegrationsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LedesFirmId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaxId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Website")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ZipCode")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Id")
+                        .IsUnique();
+
+                    b.ToTable("FirmSettings");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.Holiday", b =>
@@ -1174,6 +1571,9 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime?>("DueDate")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("IssueDate")
                         .HasColumnType("TEXT");
 
@@ -1186,6 +1586,9 @@ namespace JurisFlow.Server.Migrations
 
                     b.Property<string>("Number")
                         .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Status")
@@ -1210,6 +1613,8 @@ namespace JurisFlow.Server.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Number");
+
+                    b.HasIndex("EntityId", "OfficeId");
 
                     b.ToTable("Invoices");
                 });
@@ -1337,12 +1742,18 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("CourtType")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("FeeStructure")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("OpenDate")
@@ -1370,7 +1781,45 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasIndex("ClientId");
 
+                    b.HasIndex("OfficeId");
+
+                    b.HasIndex("EntityId", "OfficeId");
+
                     b.ToTable("Matters");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.MfaChallenge", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpiresAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IpAddress")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsUsed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UserAgent")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "ExpiresAt");
+
+                    b.ToTable("MfaChallenges");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.Notification", b =>
@@ -1410,6 +1859,65 @@ namespace JurisFlow.Server.Migrations
                     b.HasIndex("UserId", "ClientId", "CreatedAt");
 
                     b.ToTable("Notifications");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.Office", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Address")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("City")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Code")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Country")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EntityId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TimeZone")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ZipCode")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntityId", "Name");
+
+                    b.ToTable("Offices");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.OpposingParty", b =>
@@ -1469,6 +1977,72 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("OpposingParties");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.PaymentPlan", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("AutoPayEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AutoPayMethod")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AutoPayReference")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClientId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("EndDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Frequency")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("InstallmentAmount")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("InvoiceId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("NextRunDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("RemainingAmount")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime>("StartDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("TotalAmount")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NextRunDate");
+
+                    b.HasIndex("ClientId", "Status");
+
+                    b.ToTable("PaymentPlans");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.PaymentTransaction", b =>
                 {
                     b.Property<string>("Id")
@@ -1521,6 +2095,9 @@ namespace JurisFlow.Server.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("PaymentPlanId")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("ProcessedAt")
                         .HasColumnType("TEXT");
 
@@ -1539,6 +2116,12 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime?>("RefundedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("ScheduledFor")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1550,6 +2133,8 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("PaymentPlanId");
 
                     b.ToTable("PaymentTransactions");
                 });
@@ -1651,6 +2236,38 @@ namespace JurisFlow.Server.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("ResearchSessions");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.RetentionPolicy", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EntityName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("LastAppliedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RetentionDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EntityName")
+                        .IsUnique();
+
+                    b.ToTable("RetentionPolicies");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.SignatureRequest", b =>
@@ -1958,6 +2575,81 @@ namespace JurisFlow.Server.Migrations
                     b.ToTable("Tasks");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.TimeEntry", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ActivityCode")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovalStatus")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Billed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Date")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Duration")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("IsBillable")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MatterId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("Rate")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SubmittedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmittedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaskCode")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MatterId", "Date");
+
+                    b.ToTable("TimeEntries");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.TrustBankAccount", b =>
                 {
                     b.Property<string>("Id")
@@ -1977,12 +2669,18 @@ namespace JurisFlow.Server.Migrations
                     b.Property<double>("CurrentBalance")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Jurisdiction")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RoutingNumber")
@@ -1997,6 +2695,8 @@ namespace JurisFlow.Server.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("EntityId", "OfficeId");
+
                     b.ToTable("TrustBankAccounts");
                 });
 
@@ -2005,8 +2705,17 @@ namespace JurisFlow.Server.Migrations
                     b.Property<string>("Id")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("AllocationsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<double>("Amount")
                         .HasColumnType("REAL");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasColumnType("TEXT");
 
                     b.Property<double>("BalanceAfter")
                         .HasColumnType("REAL");
@@ -2014,7 +2723,13 @@ namespace JurisFlow.Server.Migrations
                     b.Property<double>("BalanceBefore")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("CheckNumber")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Description")
@@ -2024,14 +2739,45 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime?>("EarnedDate")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EntityId")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsEarned")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("IsVoided")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("LedgerId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("MatterId")
-                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OfficeId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PayorPayee")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Reference")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TrustAccountId")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Type")
@@ -2041,9 +2787,17 @@ namespace JurisFlow.Server.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("VoidReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("VoidedAt")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("Id");
 
                     b.HasIndex("MatterId");
+
+                    b.HasIndex("EntityId", "OfficeId");
 
                     b.ToTable("TrustTransactions");
                 });
@@ -2079,6 +2833,21 @@ namespace JurisFlow.Server.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("EmployeeRole")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MfaBackupCodesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("MfaEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("MfaLastUsedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("MfaSecret")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("MfaVerifiedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Mobile")
@@ -2131,6 +2900,17 @@ namespace JurisFlow.Server.Migrations
                     b.Navigation("Matter");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.ClientStatusHistory", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Client", "Client")
+                        .WithMany("StatusHistory")
+                        .HasForeignKey("ClientId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Client");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.ClientTrustLedger", b =>
                 {
                     b.HasOne("JurisFlow.Server.Models.Client", "Client")
@@ -2165,13 +2945,56 @@ namespace JurisFlow.Server.Migrations
                     b.Navigation("Matter");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.DocumentContentIndex", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Document", "Document")
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.DocumentContentToken", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Document", "Document")
+                        .WithMany()
+                        .HasForeignKey("DocumentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Document");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.Employee", b =>
                 {
+                    b.HasOne("JurisFlow.Server.Models.FirmEntity", "Entity")
+                        .WithMany()
+                        .HasForeignKey("EntityId");
+
+                    b.HasOne("JurisFlow.Server.Models.Office", "Office")
+                        .WithMany()
+                        .HasForeignKey("OfficeId");
+
                     b.HasOne("JurisFlow.Server.Models.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId");
 
+                    b.Navigation("Entity");
+
+                    b.Navigation("Office");
+
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.Expense", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Matter", "Matter")
+                        .WithMany()
+                        .HasForeignKey("MatterId");
+
+                    b.Navigation("Matter");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.InvoiceLineItem", b =>
@@ -2193,7 +3016,30 @@ namespace JurisFlow.Server.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("JurisFlow.Server.Models.FirmEntity", "Entity")
+                        .WithMany()
+                        .HasForeignKey("EntityId");
+
+                    b.HasOne("JurisFlow.Server.Models.Office", "Office")
+                        .WithMany()
+                        .HasForeignKey("OfficeId");
+
                     b.Navigation("Client");
+
+                    b.Navigation("Entity");
+
+                    b.Navigation("Office");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.Office", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.FirmEntity", "Entity")
+                        .WithMany("Offices")
+                        .HasForeignKey("EntityId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Entity");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.OpposingParty", b =>
@@ -2233,13 +3079,20 @@ namespace JurisFlow.Server.Migrations
                     b.Navigation("Matter");
                 });
 
+            modelBuilder.Entity("JurisFlow.Server.Models.TimeEntry", b =>
+                {
+                    b.HasOne("JurisFlow.Server.Models.Matter", "Matter")
+                        .WithMany()
+                        .HasForeignKey("MatterId");
+
+                    b.Navigation("Matter");
+                });
+
             modelBuilder.Entity("JurisFlow.Server.Models.TrustTransaction", b =>
                 {
                     b.HasOne("JurisFlow.Server.Models.Matter", "Matter")
                         .WithMany()
-                        .HasForeignKey("MatterId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .HasForeignKey("MatterId");
 
                     b.Navigation("Matter");
                 });
@@ -2247,6 +3100,13 @@ namespace JurisFlow.Server.Migrations
             modelBuilder.Entity("JurisFlow.Server.Models.Client", b =>
                 {
                     b.Navigation("Matters");
+
+                    b.Navigation("StatusHistory");
+                });
+
+            modelBuilder.Entity("JurisFlow.Server.Models.FirmEntity", b =>
+                {
+                    b.Navigation("Offices");
                 });
 
             modelBuilder.Entity("JurisFlow.Server.Models.Invoice", b =>

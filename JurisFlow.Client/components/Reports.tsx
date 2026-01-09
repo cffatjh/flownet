@@ -2,7 +2,8 @@ import React, { useState, useMemo } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts';
-import { FileText, Download, Calendar, DollarSign, Clock, Users, BarChart3, Filter } from './Icons';
+import { FileText, Download, Calendar, DollarSign, Clock, Users, BarChart3, TrendingUp } from './Icons';
+import EntityOfficeFilter from './common/EntityOfficeFilter';
 import { useTranslation } from '../contexts/LanguageContext';
 import { useData } from '../contexts/DataContext';
 import { toast } from './Toast';
@@ -17,22 +18,60 @@ interface DateRange {
 
 const Reports: React.FC = () => {
     const { t } = useTranslation();
-    const { matters, clients, timeEntries, invoices, tasks } = useData();
+    const { matters, clients, timeEntries, invoices, tasks, leads } = useData();
 
-    const [activeReport, setActiveReport] = useState<'performance' | 'profitability' | 'matters' | 'billing' | 'kpis'>('performance');
+    const [activeReport, setActiveReport] = useState<'executive' | 'performance' | 'profitability' | 'matters' | 'billing' | 'kpis'>('executive');
     const [dateRange, setDateRange] = useState<DateRange>({
         start: new Date(new Date().setMonth(new Date().getMonth() - 3)),
         end: new Date()
     });
     const [selectedAttorney, setSelectedAttorney] = useState<string>('all');
     const [isExporting, setIsExporting] = useState(false);
+    const [entityFilter, setEntityFilter] = useState('');
+    const [officeFilter, setOfficeFilter] = useState('');
+
+    const filteredMatters = useMemo(() => {
+        return (matters || []).filter(matter => {
+            if (entityFilter && matter.entityId !== entityFilter) return false;
+            if (officeFilter && matter.officeId !== officeFilter) return false;
+            return true;
+        });
+    }, [matters, entityFilter, officeFilter]);
+
+    const matterMap = useMemo(() => {
+        return new Map(filteredMatters.map(matter => [matter.id, matter]));
+    }, [filteredMatters]);
+
+    const filteredInvoices = useMemo(() => {
+        return (invoices || []).filter(invoice => {
+            if (entityFilter && invoice.entityId !== entityFilter) return false;
+            if (officeFilter && invoice.officeId !== officeFilter) return false;
+            return true;
+        });
+    }, [invoices, entityFilter, officeFilter]);
+
+    const filteredTimeEntries = useMemo(() => {
+        return (timeEntries || []).filter(entry => {
+            if (!entityFilter && !officeFilter) return true;
+            if (!entry.matterId) return false;
+            return matterMap.has(entry.matterId);
+        });
+    }, [timeEntries, entityFilter, officeFilter, matterMap]);
+
+    const filteredTasks = useMemo(() => {
+        return (tasks || []).filter(task => {
+            if (!entityFilter && !officeFilter) return true;
+            if (!task.matterId) return false;
+            return matterMap.has(task.matterId);
+        });
+    }, [tasks, entityFilter, officeFilter, matterMap]);
 
     // Calculate attorney performance data
     const performanceData = useMemo(() => {
         const attorneyStats: Record<string, { name: string; billableHours: number; revenue: number; matters: number; tasks: number }> = {};
 
         // Get unique attorneys from matters
-        matters?.forEach(matter => {
+        filteredMatters.forEach(matter => {
             if (matter.responsibleAttorney && !attorneyStats[matter.responsibleAttorney]) {
                 attorneyStats[matter.responsibleAttorney] = {
                     name: matter.responsibleAttorney,
@@ -45,7 +84,7 @@ const Reports: React.FC = () => {
         });
 
         // Count time entries
-        timeEntries?.forEach(entry => {
+        filteredTimeEntries.forEach(entry => {
             const date = new Date(entry.date);
             if (date >= dateRange.start && date <= dateRange.end) {
                 // For simplicity, attribute to first available attorney
@@ -58,7 +97,7 @@ const Reports: React.FC = () => {
         });
 
         // Count matters by responsible attorney
-        matters?.forEach(matter => {
+        filteredMatters.forEach(matter => {
             const date = new Date(matter.openDate);
             if (date >= dateRange.start && date <= dateRange.end) {
                 const attorney = Object.values(attorneyStats).find(a => a.name === matter.responsibleAttorney);
@@ -69,7 +108,7 @@ const Reports: React.FC = () => {
         });
 
         // Count completed tasks
-        tasks?.forEach(task => {
+        filteredTasks.forEach(task => {
             if (task.completedAt) {
                 const date = new Date(task.completedAt);
                 if (date >= dateRange.start && date <= dateRange.end && task.assignedTo) {
@@ -82,7 +121,7 @@ const Reports: React.FC = () => {
         });
 
         return Object.values(attorneyStats);
-    }, [timeEntries, matters, tasks, dateRange]);
+    }, [filteredTimeEntries, filteredMatters, filteredTasks, dateRange]);
 
     // Calculate client profitability
     const profitabilityData = useMemo(() => {
@@ -98,7 +137,7 @@ const Reports: React.FC = () => {
         });
 
         // Count invoices
-        invoices?.forEach(invoice => {
+        filteredInvoices.forEach(invoice => {
             const clientId = invoice.client?.id;
             if (isPaid(invoice.status) && clientId && clientStats[clientId]) {
                 clientStats[clientId].revenue += invoice.amount;
@@ -106,13 +145,13 @@ const Reports: React.FC = () => {
         });
 
         // Count matters and hours per client
-        matters?.forEach(matter => {
+        filteredMatters.forEach(matter => {
             const clientId = matter.client?.id;
             if (clientId && clientStats[clientId]) {
                 clientStats[clientId].matters += 1;
 
                 // Sum time entries for this matter
-                const matterEntries = timeEntries?.filter(e => e.matterId === matter.id) || [];
+                const matterEntries = filteredTimeEntries.filter(e => e.matterId === matter.id);
                 clientStats[clientId].hours += matterEntries.reduce((sum, e) => sum + e.duration / 60, 0);
             }
         });
@@ -121,13 +160,13 @@ const Reports: React.FC = () => {
             .filter(c => c.revenue > 0 || c.hours > 0)
             .sort((a, b) => b.revenue - a.revenue)
             .slice(0, 10);
-    }, [clients, invoices, matters, timeEntries]);
+    }, [clients, filteredInvoices, filteredMatters, filteredTimeEntries]);
 
     // Matter statistics by practice area
     const matterStats = useMemo(() => {
         const areaStats: Record<string, { area: string; open: number; closed: number; total: number }> = {};
 
-        matters?.forEach(matter => {
+        filteredMatters.forEach(matter => {
             if (!areaStats[matter.practiceArea]) {
                 areaStats[matter.practiceArea] = { area: matter.practiceArea, open: 0, closed: 0, total: 0 };
             }
@@ -140,7 +179,7 @@ const Reports: React.FC = () => {
         });
 
         return Object.values(areaStats);
-    }, [matters]);
+    }, [filteredMatters]);
 
     // Billing trends
     const billingTrends = useMemo(() => {
@@ -154,7 +193,7 @@ const Reports: React.FC = () => {
             months[key] = { month: key, billed: 0, collected: 0 };
         }
 
-        invoices?.forEach(invoice => {
+        filteredInvoices.forEach(invoice => {
             const date = new Date(invoice.dueDate);
             const key = date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
             if (months[key]) {
@@ -166,7 +205,7 @@ const Reports: React.FC = () => {
         });
 
         return Object.values(months);
-    }, [invoices]);
+    }, [filteredInvoices]);
 
     const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
@@ -174,6 +213,10 @@ const Reports: React.FC = () => {
     const exportToCSV = async (data: any[], filename: string) => {
         setIsExporting(true);
         try {
+            if (!data || data.length === 0) {
+                toast.error('No data available for export');
+                return;
+            }
             const headers = Object.keys(data[0] || {}).join(',');
             const rows = data.map(row => Object.values(row).join(','));
             const csv = [headers, ...rows].join('\n');
@@ -189,8 +232,9 @@ const Reports: React.FC = () => {
             toast.success('Report exported successfully');
         } catch (error) {
             toast.error('Failed to export report');
+        } finally {
+            setIsExporting(false);
         }
-        setIsExporting(false);
     };
 
     // Export to PDF (Client-side)
@@ -238,6 +282,7 @@ const Reports: React.FC = () => {
     };
 
     const reportTabs = [
+        { id: 'executive', label: 'Executive KPIs', icon: TrendingUp },
         { id: 'performance', label: t('rep_attorney_perf'), icon: BarChart3 },
         { id: 'profitability', label: t('rep_top_clients'), icon: DollarSign },
         { id: 'matters', label: t('rep_matters'), icon: FileText },
@@ -254,14 +299,14 @@ const Reports: React.FC = () => {
         const totalAvailableHours = attorneyCount * 480;
 
         // Total billable hours worked
-        const totalBillableHours = timeEntries?.reduce((sum, t) => sum + (t.duration / 60), 0) || 0;
+        const totalBillableHours = filteredTimeEntries.reduce((sum, t) => sum + (t.duration / 60), 0);
 
         // Total hours billed to clients (from invoices)
-        const totalBilledAmount = invoices?.reduce((sum, inv) => sum + inv.amount, 0) || 0;
-        const totalCollected = invoices?.filter(i => i.status === 'PAID').reduce((sum, inv) => sum + inv.amount, 0) || 0;
+        const totalBilledAmount = filteredInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+        const totalCollected = filteredInvoices.filter(i => i.status === 'PAID').reduce((sum, inv) => sum + inv.amount, 0);
 
         // Worked value (hours * rate)
-        const totalWorkedValue = timeEntries?.reduce((sum, t) => sum + ((t.duration / 60) * t.rate), 0) || 0;
+        const totalWorkedValue = filteredTimeEntries.reduce((sum, t) => sum + ((t.duration / 60) * t.rate), 0);
 
         // Utilization Rate = Billable Hours / Available Hours
         const utilizationRate = totalAvailableHours > 0 ? (totalBillableHours / totalAvailableHours) * 100 : 0;
@@ -275,7 +320,7 @@ const Reports: React.FC = () => {
         // A/R Aging buckets
         const aging = { current: 0, days30: 0, days60: 0, days90: 0, over90: 0 };
 
-        invoices?.forEach(inv => {
+        filteredInvoices.forEach(inv => {
             if (inv.status === 'PAID') return;
 
             const dueDate = new Date(inv.dueDate);
@@ -295,7 +340,7 @@ const Reports: React.FC = () => {
         });
 
         // WIP (Work In Progress) - unbilled time & expenses
-        const wip = timeEntries?.filter(t => !t.billed).reduce((sum, t) => sum + ((t.duration / 60) * t.rate), 0) || 0;
+        const wip = filteredTimeEntries.filter(t => !t.billed).reduce((sum, t) => sum + ((t.duration / 60) * t.rate), 0);
 
         return {
             utilizationRate,
@@ -314,7 +359,113 @@ const Reports: React.FC = () => {
                 { name: '90+ Days', value: aging.over90, color: '#dc2626' }
             ]
         };
-    }, [timeEntries, invoices, performanceData]);
+    }, [filteredTimeEntries, filteredInvoices, performanceData]);
+
+    const leadFunnelData = useMemo(() => {
+        if (!leads || leads.length === 0) {
+            return [];
+        }
+        const stages = ['New', 'Contacted', 'Consultation', 'Retained', 'Lost'];
+        return stages.map(stage => ({
+            stage,
+            count: (leads || []).filter(lead => lead.status === stage).length
+        }));
+    }, [leads]);
+
+    const matterAgingData = useMemo(() => {
+        const buckets = [
+            { label: '0-30 Days', min: 0, max: 30, color: '#10b981' },
+            { label: '31-90 Days', min: 31, max: 90, color: '#3b82f6' },
+            { label: '91-180 Days', min: 91, max: 180, color: '#f59e0b' },
+            { label: '181+ Days', min: 181, max: Number.POSITIVE_INFINITY, color: '#ef4444' }
+        ];
+
+        const counts = buckets.map(bucket => ({ bucket: bucket.label, count: 0, color: bucket.color }));
+        const now = Date.now();
+
+        const openMatters = filteredMatters.filter(m => m.status === 'Open');
+        if (openMatters.length === 0) {
+            return [];
+        }
+
+        openMatters.forEach(matter => {
+            const openedAt = new Date(matter.openDate).getTime();
+            if (Number.isNaN(openedAt)) return;
+            const daysOpen = Math.floor((now - openedAt) / (1000 * 60 * 60 * 24));
+            const target = buckets.findIndex(b => daysOpen >= b.min && daysOpen <= b.max);
+            if (target >= 0) {
+                counts[target].count += 1;
+            }
+        });
+
+        return counts;
+    }, [filteredMatters]);
+
+    const practiceAreaRevenue = useMemo(() => {
+        const revenueMap: Record<string, number> = {};
+        filteredInvoices.forEach(invoice => {
+            const matter = filteredMatters.find(m => m.id === invoice.matterId);
+            const key = matter?.practiceArea || 'Unassigned';
+            revenueMap[key] = (revenueMap[key] || 0) + invoice.amount;
+        });
+        return Object.entries(revenueMap)
+            .map(([area, revenue]) => ({ area, revenue }))
+            .sort((a, b) => b.revenue - a.revenue);
+    }, [filteredInvoices, filteredMatters]);
+
+    const topTimekeepers = useMemo(() => {
+        return [...performanceData]
+            .sort((a, b) => b.billableHours - a.billableHours)
+            .slice(0, 5);
+    }, [performanceData]);
+
+    const executiveStats = useMemo(() => {
+        const openMatters = filteredMatters.filter(m => m.status === 'Open');
+        const matterClientIds = new Set(
+            filteredMatters
+                .map(m => m.client?.id)
+                .filter((id): id is string => Boolean(id))
+        );
+        const activeClients = (clients || []).filter(c => c.status === 'Active' && matterClientIds.has(c.id));
+        const totalClients = matterClientIds.size;
+        const totalLeads = leads?.length || 0;
+        const retainedLeads = leads?.filter(l => l.status === 'Retained').length || 0;
+        const leadConversionRate = totalLeads > 0 ? (retainedLeads / totalLeads) * 100 : 0;
+
+        const now = Date.now();
+        const avgMatterAgeDays = openMatters.length > 0
+            ? openMatters.reduce((sum, matter) => {
+                const openedAt = new Date(matter.openDate).getTime();
+                if (Number.isNaN(openedAt)) return sum;
+                return sum + Math.max(0, (now - openedAt) / (1000 * 60 * 60 * 24));
+            }, 0) / openMatters.length
+            : 0;
+
+        const paidInvoices = filteredInvoices.filter(i => isPaid(i.status));
+        const daysToPay = paidInvoices
+            .map(inv => {
+                const issueDate = new Date(inv.issueDate).getTime();
+                const paidDateRaw = inv.paidDate || inv.updatedAt || inv.sentAt || inv.issueDate;
+                const paidDate = new Date(paidDateRaw).getTime();
+                if (Number.isNaN(issueDate) || Number.isNaN(paidDate)) return null;
+                return Math.max(0, (paidDate - issueDate) / (1000 * 60 * 60 * 24));
+            })
+            .filter((value): value is number => value !== null);
+
+        const avgDaysToPay = daysToPay.length > 0
+            ? daysToPay.reduce((sum, value) => sum + value, 0) / daysToPay.length
+            : 0;
+
+        return {
+            openMatters: openMatters.length,
+            activeClients: activeClients.length,
+            totalClients,
+            totalLeads,
+            leadConversionRate,
+            avgMatterAgeDays,
+            avgDaysToPay
+        };
+    }, [filteredMatters, filteredInvoices, clients, leads]);
 
     return (
         <div className="p-6 space-y-6 h-full overflow-y-auto">
@@ -325,7 +476,14 @@ const Reports: React.FC = () => {
                     <p className="text-gray-500 text-sm mt-1">Analyze firm performance and trends</p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                    <EntityOfficeFilter
+                        entityId={entityFilter}
+                        officeId={officeFilter}
+                        onEntityChange={setEntityFilter}
+                        onOfficeChange={setOfficeFilter}
+                        allowAll
+                    />
                     {/* Date Range Picker */}
                     <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-lg px-3 py-2">
                         <Calendar className="w-4 h-4 text-gray-400" />
@@ -347,9 +505,11 @@ const Reports: React.FC = () => {
                     {/* Export Buttons */}
                     <button
                         onClick={() => {
-                            const data = activeReport === 'performance' ? performanceData :
-                                activeReport === 'profitability' ? profitabilityData :
-                                    activeReport === 'matters' ? matterStats : billingTrends;
+                            const data = activeReport === 'executive' ? leadFunnelData :
+                                activeReport === 'performance' ? performanceData :
+                                    activeReport === 'profitability' ? profitabilityData :
+                                        activeReport === 'matters' ? matterStats :
+                                            activeReport === 'kpis' ? kpiData.agingData : billingTrends;
                             exportToCSV(data, activeReport);
                         }}
                         disabled={isExporting}
@@ -368,6 +528,12 @@ const Reports: React.FC = () => {
                     </button>
                 </div>
             </div>
+
+            {(entityFilter || officeFilter) && (
+                <div className="text-xs text-gray-500">
+                    Lead metrics remain firm-wide until leads are assigned to an entity or office.
+                </div>
+            )}
 
             {/* Report Type Tabs */}
             <div className="flex gap-2 border-b border-gray-200 pb-4">
@@ -391,6 +557,131 @@ const Reports: React.FC = () => {
 
             {/* Report Content */}
             <div id="report-content" className="bg-white rounded-xl border border-gray-200 p-6 shadow-sm">
+                {activeReport === 'executive' && (
+                    <div className="space-y-6">
+                        <h3 className="text-lg font-bold text-slate-800">Executive KPIs</h3>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                                <p className="text-xs text-gray-500 uppercase">Active Matters</p>
+                                <p className="text-2xl font-bold text-slate-800">{executiveStats.openMatters}</p>
+                                <p className="text-xs text-gray-500 mt-1">{executiveStats.activeClients} active clients</p>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                                <p className="text-xs text-gray-500 uppercase">Lead Conversion</p>
+                                <p className="text-2xl font-bold text-slate-800">{executiveStats.leadConversionRate.toFixed(1)}%</p>
+                                <p className="text-xs text-gray-500 mt-1">{executiveStats.totalLeads} total leads</p>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                                <p className="text-xs text-gray-500 uppercase">Avg Days to Pay</p>
+                                <p className="text-2xl font-bold text-slate-800">{executiveStats.avgDaysToPay.toFixed(0)} days</p>
+                                <p className="text-xs text-gray-500 mt-1">Paid invoices only</p>
+                            </div>
+                            <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                                <p className="text-xs text-gray-500 uppercase">Avg Matter Age</p>
+                                <p className="text-2xl font-bold text-slate-800">{executiveStats.avgMatterAgeDays.toFixed(0)} days</p>
+                                <p className="text-xs text-gray-500 mt-1">Open matters</p>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-slate-800 mb-4">Lead Funnel</h4>
+                                {leadFunnelData.length === 0 ? (
+                                    <p className="text-sm text-gray-500">No lead activity yet.</p>
+                                ) : (
+                                    <div className="h-72">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={leadFunnelData}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                                <XAxis dataKey="stage" tick={{ fontSize: 11 }} />
+                                                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                                                <Tooltip />
+                                                <Bar dataKey="count" name="Leads" radius={[4, 4, 0, 0]}>
+                                                    {leadFunnelData.map((entry, index) => (
+                                                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                    ))}
+                                                </Bar>
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-slate-800 mb-4">Revenue by Practice Area</h4>
+                                {practiceAreaRevenue.length === 0 ? (
+                                    <p className="text-sm text-gray-500">No invoice revenue recorded.</p>
+                                ) : (
+                                    <div className="h-72">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <PieChart>
+                                                <Pie
+                                                    data={practiceAreaRevenue}
+                                                    dataKey="revenue"
+                                                    nameKey="area"
+                                                    innerRadius={50}
+                                                    outerRadius={90}
+                                                >
+                                                    {practiceAreaRevenue.map((entry, index) => (
+                                                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                                                    ))}
+                                                </Pie>
+                                                <Tooltip formatter={(value: any) => `$${value.toLocaleString()}`} />
+                                            </PieChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-slate-800 mb-4">Open Matter Aging</h4>
+                                {matterAgingData.length === 0 ? (
+                                    <p className="text-sm text-gray-500">No open matters yet.</p>
+                                ) : (
+                                    <div className="h-64">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <BarChart data={matterAgingData}>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                                                <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
+                                                <YAxis allowDecimals={false} tick={{ fontSize: 11 }} />
+                                                <Tooltip />
+                                                <Bar dataKey="count" name="Matters" radius={[4, 4, 0, 0]}>
+                                                    {matterAgingData.map((entry, index) => (
+                                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                                    ))}
+                                                </Bar>
+                                            </BarChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                )}
+                            </div>
+                            <div className="bg-gray-50 rounded-lg p-4">
+                                <h4 className="font-semibold text-slate-800 mb-4">Top Timekeepers</h4>
+                                {topTimekeepers.length === 0 ? (
+                                    <p className="text-sm text-gray-500">No time activity recorded.</p>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {topTimekeepers.map((attorney, index) => (
+                                            <div key={`${attorney.name}-${index}`} className="flex items-center justify-between bg-white border border-gray-200 rounded-lg p-3">
+                                                <div>
+                                                    <p className="text-sm font-semibold text-slate-800">{attorney.name}</p>
+                                                    <p className="text-xs text-gray-500">{attorney.matters} matters · {attorney.tasks} tasks</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-sm font-semibold text-slate-800">{attorney.billableHours.toFixed(1)}h</p>
+                                                    <p className="text-xs text-emerald-600">${attorney.revenue.toLocaleString()}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
                 {activeReport === 'performance' && (
                     <div className="space-y-6">
                         <h3 className="text-lg font-bold text-slate-800">{t('rep_attorney_perf')}</h3>
